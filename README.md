@@ -61,21 +61,21 @@ Both offer the same tools.
 ## Tools
 
 <!-- tools -->
-- `transcribe`: Start transcribing a finished recording, from a public link or a file sent inline; returns a transcriptionId at once, before any text.
+- `create_transcription`: Start transcribing a finished recording, from a public link or a file sent inline; returns a transcriptionId at once, before any text.
 - `get_transcription`: Read one transcription's status and text, with timestamps and speakers: as it was spoken or translated, at once or after waiting for it to finish.
 - `list_transcriptions`: List this account's transcriptions, newest first, a page at a time: files, links and live ones, including those broadcasts recorded.
 - `search_transcriptions`: Find what was said across this account's transcriptions, or in one: the lines with given words or a name (mode words), or the passages that answer a question (mode meaning).
 - `get_summary`: Get the title and summary of a finished transcription, writing one the first time if it has none.
-- `rename_speaker`: Name a speaker in one transcription, so its transcript shows the name instead of "Speaker N".
+- `rename_speaker`: Name or rename a speaker: one person in one transcription, so its transcript shows the name instead of "Speaker N", or a saved speaker, everywhere they are recognised.
 - `delete_transcription`: Move a transcription to the trash, with its recordings, transcript, translations and summary; its share links stop working.
-- `restore_transcription`: Bring a deleted transcription back from the trash, with its recordings, transcript, translations, summary and working share links.
-- `set_cloned_voices`: Turn cloned voices on or off for one transcription's spoken translations.
+- `set_cloned_voices`: Turn cloned voices on or off for spoken translations: for one transcription, or for one saved speaker everywhere they are recognised.
 - `list_speakers`: List the speakers this account has saved: people recognised by name in every new transcription.
 - `save_speaker`: Save one speaker of a transcription to the account's saved speakers, so later transcriptions recognise and name them; their own speech in this transcription is the sample.
 - `delete_speaker`: Delete a saved speaker for good: their name, fingerprint, stored sample and any cloned voice are erased at once and cannot be restored.
 - `list_broadcasts`: List this account's broadcasts, or get one in detail.
 - `start_broadcast`: Start live transcription and translation of a stream playing now, on a public link listeners open in their own language.
 - `stop_broadcast`: Stop the live transcription a broadcast is running, which also stops its billing.
+- `delete_broadcast`: Move a broadcast to the trash: its public link and stream addresses stop working for listeners.
 <!-- /tools -->
 
 Errors come back as tool results with `isError` set and a body with `error` (a code such as `not_found`, `invalid_options`, `invalid_state`, `insufficient_credit` or `rate_limited`), `message`, `retryable`, `retryAfterS` and `topUpUrl` when credit is needed. Retry a start with the same `idempotencyKey` so nothing is made or billed twice.

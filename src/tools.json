@@ -1,9 +1,9 @@
 {
-  "instructions": "VocalStack transcribes and translates recorded or live audio and video in about 100 languages, with speaker labels.\nRecorded audio: transcribe (a link or a file) returns a transcriptionId at once; get_transcription with waitS waits for it and reads the text, in any language with lang.\nFind: list_transcriptions (ids, newest first); search_transcriptions (mode words for words or names, meaning for a question).\nOne transcription: get_summary; rename_speaker; set_cloned_voices; delete_transcription and restore_transcription.\nLive streams: start_broadcast, then get_transcription while it runs, stop_broadcast to end it; list_broadcasts shows them.\nPeople: list_speakers, save_speaker (voice cloned only with the person's consent), delete_speaker.\nOnly transcription is billed; everything else, and listening, is free. Retry a start with the same idempotencyKey.\nErrors are results with isError true: error, message, retryable, and retryAfterS or topUpUrl when they apply.",
+  "instructions": "VocalStack transcribes and translates recorded or live audio and video in about 100 languages, with speaker labels.\nRecorded audio: create_transcription (a link or a file) returns a transcriptionId at once; get_transcription with waitS waits for it and reads the text, in any language with lang.\nFind: list_transcriptions (ids, newest first); search_transcriptions (mode words for words or names, meaning for a question).\nOne transcription: get_summary; rename_speaker; set_cloned_voices; delete_transcription (to the trash, restorable in the Dashboard).\nLive streams: start_broadcast, then get_transcription while it runs, stop_broadcast to end it; list_broadcasts shows them; delete_broadcast removes one.\nPeople: list_speakers, save_speaker (voice cloned only with the person's consent), rename_speaker, set_cloned_voices with speakerId, delete_speaker.\nOnly transcription is billed; everything else, and listening, is free. Retry a start with the same idempotencyKey.\nErrors are results with isError true: error, message, retryable, and retryAfterS or topUpUrl when they apply.",
   "tools": [
     {
-      "name": "transcribe",
-      "title": "Transcribe a recording",
+      "name": "create_transcription",
+      "title": "Create a transcription",
       "description": "Start transcribing a finished recording, from a public link or a file sent inline; returns a transcriptionId at once, before any text.\nUse: audio or video that has ended (a file, podcast episode, YouTube video or public post). A stream playing now: start_broadcast. The result: get_transcription with waitS, no polling needed.\nList price: $0.20 an hour of audio, billed per second transcribed; Pay as you go bills at least 5 minutes per transcription. Each call is a new, billed transcription unless it repeats an idempotencyKey; a refused call costs nothing; summary and shareLink are free.\nNew transcriptions an hour per account: 10 on Pay as you go, 100 on Premium.\nTranscriptions running at once per account: 5 on Pay as you go, 50 on Premium; more wait their turn instead of failing.\nReturns: transcriptionId, state (queued, fetching, transcribing, then done, failed or stopped), progress, shareUrl when shareLink is true, replayed true for a repeated key.\nErrors: invalid_options (neither or both of url and fileBase64, not a public http(s) link, bad base64, too large), invalid_audio (empty file), idempotency_key_reused, insufficient_credit (with topUpUrl), quota_exceeded, rate_limited (with retryAfterS). A source that cannot be read ends in state failed, with error.",
       "inputSchema": {
         "additionalProperties": false,
@@ -101,7 +101,7 @@
         "type": "object"
       },
       "annotations": {
-        "title": "Transcribe a recording",
+        "title": "Create a transcription",
         "readOnlyHint": false,
         "destructiveHint": false,
         "idempotentHint": false,
@@ -111,7 +111,7 @@
     {
       "name": "get_transcription",
       "title": "Read a transcription",
-      "description": "Read one transcription's status and text, with timestamps and speakers: as it was spoken or translated, at once or after waiting for it to finish.\nUse: after transcribe (waitS saves polling), or any time during a live transcription for the text so far. An overview: get_summary. Finding a passage: search_transcriptions.\nBehaviour: free. A wait ends as soon as the work does, and sends progress notifications when the client gives a progress token. lang needs a finished transcription; the first call in a new language can take up to a minute on a long one, later pages are quick. Page with offset = nextOffset.\nReturns: status (state, progress, error when failed), timedOut when waitS was set, then segmentCount, partial while text is still coming, text or segments, nextOffset when more remain, and lang and translated with lang. A wait that runs out with lang set returns the status only.\nErrors: not_found; invalid_state for lang before it is finished; invalid_options for an unsupported lang or includeWords with lang; rate_limited when waitS is set and 4 waits are already open for this key (8 for the account).",
+      "description": "Read one transcription's status and text, with timestamps and speakers: as it was spoken or translated, at once or after waiting for it to finish.\nUse: after create_transcription (waitS saves polling), or any time during a live transcription for the text so far. An overview: get_summary. Finding a passage: search_transcriptions.\nBehaviour: free. A wait ends as soon as the work does, and sends progress notifications when the client gives a progress token. lang needs a finished transcription; the first call in a new language can take up to a minute on a long one, later pages are quick. Page with offset = nextOffset.\nReturns: status (state, progress, error when failed, shareUrl when it has a public link: made with create_transcription's shareLink, or in the Dashboard), timedOut when waitS was set, then segmentCount, partial while text is still coming, text or segments, nextOffset when more remain, and lang and translated with lang. A wait that runs out with lang set returns the status only.\nErrors: not_found; invalid_state for lang before it is finished; invalid_options for an unsupported lang or includeWords with lang; rate_limited when waitS is set and 4 waits are already open for this key (8 for the account).",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -157,7 +157,7 @@
             "type": "integer"
           },
           "transcriptionId": {
-            "description": "A transcriptionId from transcribe, list_transcriptions, search_transcriptions or start_broadcast.",
+            "description": "A transcriptionId from create_transcription, list_transcriptions, search_transcriptions or start_broadcast.",
             "examples": [
               "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a"
             ],
@@ -191,7 +191,7 @@
     {
       "name": "list_transcriptions",
       "title": "List transcriptions",
-      "description": "List this account's transcriptions, newest first, a page at a time: files, links and live ones, including those broadcasts recorded.\nUse: to find a transcriptionId or see what exists. What was said: search_transcriptions. Broadcasts: list_broadcasts.\nBehaviour: free. lifecycle archived lists the trash, which restore_transcription can empty back for 30 days. A cursor this tool did not give out is refused.\nReturns: transcriptions (transcriptionId, name, createdAt, kind file or live, state, durationS and title when known, broadcastId for a broadcast's), and nextCursor while more remain. None: an empty list.\nErrors: invalid_options for an unknown cursor.",
+      "description": "List this account's transcriptions, newest first, a page at a time: files, links and live ones, including those broadcasts recorded.\nUse: to find a transcriptionId or see what exists. What was said: search_transcriptions. Broadcasts: list_broadcasts.\nBehaviour: free. lifecycle archived lists the trash: deleted transcriptions, which the VocalStack Dashboard can restore for 30 days. A cursor this tool did not give out is refused.\nReturns: transcriptions (transcriptionId, name, createdAt, kind file or live, state, durationS and title when known, broadcastId for a broadcast's), and nextCursor while more remain. None: an empty list.\nErrors: invalid_options for an unknown cursor.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -273,7 +273,7 @@
             "type": "string"
           },
           "transcriptionId": {
-            "description": "Search only this transcription (a transcriptionId from list_transcriptions or transcribe). Omit to search the whole account.",
+            "description": "Search only this transcription (a transcriptionId from list_transcriptions or create_transcription). Omit to search the whole account.",
             "examples": [
               "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a"
             ],
@@ -297,7 +297,7 @@
     {
       "name": "get_summary",
       "title": "Get a summary",
-      "description": "Get the title and summary of a finished transcription, writing one the first time if it has none.\nUse: for an overview. Full text, or the whole text in another language: get_transcription. A specific question: search_transcriptions with mode meaning.\nBehaviour: free. Writing a first summary needs the write scope and keeps it for later calls; reading an existing one needs read only.\nReturns: state ready with title and summary (and lang when translated); pending while it is written or the transcription still runs (call again in a few seconds); not_requested for recordings under a minute; unavailable when the transcription failed.\nErrors: not_found; forbidden when a summary must be written and the key is read-only.",
+      "description": "Get the title and summary of a finished transcription, writing one the first time if it has none.\nUse: for an overview. Full text, or the whole text in another language: get_transcription. A specific question: search_transcriptions with mode meaning.\nArguments: transcriptionId of a finished transcription (state done, or a stopped live one), from create_transcription, list_transcriptions or search_transcriptions. lang is optional, a language code such as fr: it translates only when the transcription was made with summary translations on and lang differs from the language the summary is in; otherwise the original comes back, without lang in the result.\nBehaviour: free. Writing a first summary needs the write scope and keeps it for later calls; reading an existing one needs read only.\nReturns: state ready with title and summary (and lang when translated); pending while it is written or the transcription still runs (call again in a few seconds); not_requested for recordings under a minute; unavailable when the transcription failed.\nErrors: not_found; forbidden when a summary must be written and the key is read-only.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -309,7 +309,7 @@
             "type": "string"
           },
           "transcriptionId": {
-            "description": "A transcriptionId from transcribe, list_transcriptions, search_transcriptions or start_broadcast.",
+            "description": "A transcriptionId from create_transcription, list_transcriptions, search_transcriptions or start_broadcast.",
             "examples": [
               "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a"
             ],
@@ -333,28 +333,37 @@
     {
       "name": "rename_speaker",
       "title": "Rename a speaker",
-      "description": "Name a speaker in one transcription, so its transcript shows the name instead of \"Speaker N\".\nUse: labelling who spoke here. To recognise the person in later transcriptions too: save_speaker (it also names them here). Saved speakers: list_speakers.\nBehaviour: free; applies to that person in every recording of the transcription, and listeners following it live see it at once.\nReturns: transcriptionId, speaker, name (null when cleared).\nErrors: not_found for an unknown transcription or speaker number; forbidden for a read-only key.",
+      "description": "Name or rename a speaker: one person in one transcription, so its transcript shows the name instead of \"Speaker N\", or a saved speaker, everywhere they are recognised.\nUse: labelling who spoke here, or correcting a saved speaker's name. To recognise the person in later transcriptions too: save_speaker (it also names them here). Saved speakers: list_speakers.\nArguments: give exactly one of transcriptionId with speaker (the number in \"Speaker 2\" from get_transcription, not a name or an id) or speakerId (from list_speakers). name is trimmed; in a transcription it is cut to 80 characters and an empty name undoes it; a saved speaker's name is 1 to 60 characters. Calling again replaces the name.\nBehaviour: free and reversible; in a transcription it applies to that person in every recording of it, and listeners following it live see it at once. The person's speaker number never changes. Renaming a saved speaker changes nothing else about them (fingerprint, consent, cloned voice).\nReturns: transcriptionId, speaker, name (null when cleared); or, with speakerId, speakerId and name.\nErrors: invalid_options for both or neither kind of target, or a saved speaker's name out of 1 to 60; not_found for an unknown transcription, speaker number or speakerId; forbidden for a read-only key.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "name": {
-            "description": "The name to show instead of \"Speaker N\". An empty string clears it back to \"Speaker N\".",
+            "description": "The name to show instead of \"Speaker N\", trimmed: 1 to 80 characters in one transcription (longer is cut; an empty string clears it back to \"Speaker N\"), 1 to 60 for a saved speaker (never empty).",
             "examples": [
-              "Maria Lopez"
+              "Maria Lopez",
+              ""
             ],
             "maxLength": 80,
             "type": "string"
           },
           "speaker": {
-            "description": "The N of \"Speaker N\" in get_transcription's text, or speakerNumber in its segments; it stays the same after naming.",
+            "description": "With transcriptionId: the N of \"Speaker N\" in get_transcription's text, or speakerNumber in its segments; it stays the same after naming.",
             "examples": [
               2
             ],
             "minimum": 1,
             "type": "integer"
           },
+          "speakerId": {
+            "description": "Instead of transcriptionId and speaker: a saved speaker's id (id in list_speakers, or speakerId from save_speaker), renamed everywhere they are recognised.",
+            "examples": [
+              "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a"
+            ],
+            "format": "uuid",
+            "type": "string"
+          },
           "transcriptionId": {
-            "description": "A transcriptionId from transcribe, list_transcriptions, search_transcriptions or start_broadcast.",
+            "description": "With speaker: the transcription the speaker is in (from create_transcription, list_transcriptions, search_transcriptions or start_broadcast). Leave out with speakerId.",
             "examples": [
               "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a"
             ],
@@ -363,8 +372,6 @@
           }
         },
         "required": [
-          "transcriptionId",
-          "speaker",
           "name"
         ],
         "type": "object"
@@ -380,12 +387,12 @@
     {
       "name": "delete_transcription",
       "title": "Delete a transcription",
-      "description": "Move a transcription to the trash, with its recordings, transcript, translations and summary; its share links stop working.\nUse: to remove one. restore_transcription brings it back unchanged for 30 days; after that it is erased for good. Saved speakers stay (delete_speaker).\nBehaviour: a file or link still being transcribed is stopped first and keeps its text so far, billed only for what was transcribed; restoring does not resume it. A live one must be stopped first (stop_broadcast).\nReturns: transcriptionId, name, deleted, deletedAt, restorableUntil.\nErrors: invalid_state while recording live or when locked; not_found; forbidden for a read-only key.",
+      "description": "Move a transcription to the trash, with its recordings, transcript, translations and summary; its share links stop working.\nUse: to remove one. For 30 days it can be restored unchanged from the trash in the VocalStack Dashboard (list_transcriptions with lifecycle archived lists it); after that it is erased for good. Saved speakers stay (delete_speaker). A broadcast itself: delete_broadcast.\nBehaviour: a file or link still being transcribed is stopped first and keeps its text so far, billed only for what was transcribed; restoring does not resume it. A live one must be stopped first (stop_broadcast).\nReturns: transcriptionId, name, deleted, deletedAt, restorableUntil.\nErrors: invalid_state while recording live or when locked; not_found; forbidden for a read-only key.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "transcriptionId": {
-            "description": "A transcriptionId from list_transcriptions (lifecycle archived lists the trash) or transcribe.",
+            "description": "A transcriptionId from list_transcriptions or create_transcription.",
             "examples": [
               "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a"
             ],
@@ -407,52 +414,31 @@
       }
     },
     {
-      "name": "restore_transcription",
-      "title": "Restore a transcription",
-      "description": "Bring a deleted transcription back from the trash, with its recordings, transcript, translations, summary and working share links.\nUse: undoing delete_transcription within 30 days; list_transcriptions with lifecycle archived lists the trash.\nBehaviour: free. A transcription stopped by its deletion stays stopped (transcribe it again to finish it).\nReturns: transcriptionId, name, restored true.\nErrors: not_found for an unknown id or one erased after its 30 days; forbidden for a read-only key.",
-      "inputSchema": {
-        "additionalProperties": false,
-        "properties": {
-          "transcriptionId": {
-            "description": "A transcriptionId from list_transcriptions (lifecycle archived lists the trash) or transcribe.",
-            "examples": [
-              "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a"
-            ],
-            "format": "uuid",
-            "type": "string"
-          }
-        },
-        "required": [
-          "transcriptionId"
-        ],
-        "type": "object"
-      },
-      "annotations": {
-        "title": "Restore a transcription",
-        "readOnlyHint": false,
-        "destructiveHint": false,
-        "idempotentHint": true,
-        "openWorldHint": false
-      }
-    },
-    {
       "name": "set_cloned_voices",
       "title": "Turn cloned voices on or off",
-      "description": "Turn cloned voices on or off for one transcription's spoken translations.\nOn: each speaker's translated words are read in that speaker's own cloned voice, never anyone else's; a speaker without a usable clone gets a stock voice. Off: stock voices for all. Voices are chosen by VocalStack; this is the only voice choice.\nConsent: turning on records, with your account and the time, that everyone speaking agreed, and releases the clones of this transcription waiting for it. Speakers who refused are never cloned.\nBehaviour: free; lines read aloud after the change use the new setting.\nReturns: transcriptionId, name, clonedVoices.\nErrors: invalid_options for on without consent, invalid_state for a deleted transcription, not_found, forbidden for a read-only key.",
+      "description": "Turn cloned voices on or off for spoken translations: for one transcription, or for one saved speaker everywhere they are recognised.\nOn: the speaker's translated words are read in that speaker's own cloned voice, never anyone else's; a speaker without a usable clone gets a stock voice. Off: stock voices. Voices are chosen by VocalStack; this is the only voice choice.\nArguments: give exactly one of transcriptionId (every speaker in it) or speakerId (a saved speaker, from list_speakers). on is required; consent must be true to turn on.\nConsent: turning on records, with your account and the time, that everyone speaking (or that saved speaker) agreed. For a transcription it releases its clones waiting for consent; speakers who refused are never cloned. For a saved speaker saved without consent it starts their clone from their stored sample. Off keeps the saved speaker's fingerprint, consent and clone, only unused; to erase the clone and their samples: delete_speaker.\nBehaviour: free and reversible; lines read aloud after the change use the new setting.\nReturns: transcriptionId, name, clonedVoices; or, with speakerId, speakerId, name, consent, clonedVoice, and voiceState (training, then ready) when cloned.\nErrors: invalid_options for on without consent or both or neither target; invalid_state for a deleted transcription, a speaker who refused, or one with no stored sample to clone from; not_found; forbidden for a read-only key.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "consent": {
             "default": false,
-            "description": "Must be true to turn cloned voices on: confirms everyone speaking agreed to have their voice cloned. Recorded with your account and the time. Not needed to turn them off.",
+            "description": "Must be true to turn cloned voices on: confirms everyone speaking (with speakerId: that person) agreed to have their voice cloned. Recorded with your account and the time. Not needed to turn them off.",
             "type": "boolean"
           },
           "on": {
-            "description": "true: read each speaker's translated words in their own cloned voice; false (every transcription's default): stock voices.",
+            "description": "true: translations of the speaker's own words are read in their own cloned voice; false (the default for a transcription): stock voices.",
             "type": "boolean"
           },
+          "speakerId": {
+            "description": "Instead of transcriptionId, for one saved speaker everywhere they are recognised: id in list_speakers, or speakerId from save_speaker.",
+            "examples": [
+              "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a"
+            ],
+            "format": "uuid",
+            "type": "string"
+          },
           "transcriptionId": {
-            "description": "A transcriptionId from transcribe, list_transcriptions, search_transcriptions or start_broadcast.",
+            "description": "For one transcription's spoken translations: a transcriptionId from create_transcription, list_transcriptions, search_transcriptions or start_broadcast. Leave out with speakerId.",
             "examples": [
               "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a"
             ],
@@ -461,7 +447,6 @@
           }
         },
         "required": [
-          "transcriptionId",
           "on"
         ],
         "type": "object"
@@ -494,7 +479,7 @@
     {
       "name": "save_speaker",
       "title": "Save a speaker",
-      "description": "Save one speaker of a transcription to the account's saved speakers, so later transcriptions recognise and name them; their own speech in this transcription is the sample.\nUse: remembering a person across transcriptions. This transcription only: rename_speaker. Who is saved: list_speakers. Remove: delete_speaker.\nBehaviour: free; also names them in this transcription. Each call saves a new speaker, so check list_speakers first. Without consent only a voice fingerprint is kept; with it the voice is cloned too, recorded with your account and the time.\nReturns: speakerId, name, consent (granted or pending), cloned, voiceState (training, then ready) when cloned.\nErrors: not_found for an unknown transcription or speaker number; invalid_options for too little speech of them (the message says how much there is); forbidden for a read-only key.",
+      "description": "Save one speaker of a transcription to the account's saved speakers, so later transcriptions recognise and name them; their own speech in this transcription is the sample.\nUse: remembering a person across transcriptions. This transcription only: rename_speaker. Who is saved: list_speakers. Remove: delete_speaker.\nArguments: transcriptionId and speaker point at one person: speaker is the number in \"Speaker 2\" from get_transcription, who must have spoken (a live transcription can still be running). name is 1 to 60 characters, trimmed; renaming later: rename_speaker with speakerId. consent is true only when that person agreed to be cloned; leaving it out or false keeps only their fingerprint.\nBehaviour: free; also names them in this transcription. Each call saves a new speaker, so check list_speakers first. Without consent only a voice fingerprint is kept; with it the voice is cloned too, recorded with your account and the time.\nReturns: speakerId, name, consent (granted or pending), cloned, voiceState (training, then ready) when cloned.\nErrors: not_found for an unknown transcription or speaker number; invalid_options for too little speech of them (the message says how much there is); forbidden for a read-only key.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -521,7 +506,7 @@
             "type": "integer"
           },
           "transcriptionId": {
-            "description": "A transcriptionId from transcribe, list_transcriptions, search_transcriptions or start_broadcast.",
+            "description": "A transcriptionId from create_transcription, list_transcriptions, search_transcriptions or start_broadcast.",
             "examples": [
               "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a"
             ],
@@ -547,7 +532,7 @@
     {
       "name": "delete_speaker",
       "title": "Delete a saved speaker",
-      "description": "Delete a saved speaker for good: their name, fingerprint, stored sample and any cloned voice are erased at once and cannot be restored.\nUse: the person should no longer be recognised, or asked for their voice to be removed. A name inside one transcription: rename_speaker.\nBehaviour: free. Transcripts keep every line they spoke; lines labelled with their saved name go back to \"Speaker N\".\nReturns: speakerId, deleted true.\nErrors: not_found for an unknown or already deleted id; forbidden for a read-only key.",
+      "description": "Delete a saved speaker for good: their name, fingerprint, stored sample and any cloned voice are erased at once and cannot be restored.\nUse: the person should no longer be recognised, or asked for their voice to be removed. A name inside one transcription: rename_speaker.\nArguments: speakerId is a saved speaker's id, the id field of list_speakers or the speakerId save_speaker returned; not a speaker number (\"Speaker 2\") and not a transcriptionId. To unname someone in one transcription instead: rename_speaker with an empty name.\nBehaviour: free. Transcripts keep every line they spoke; lines labelled with their saved name go back to \"Speaker N\".\nReturns: speakerId, deleted true.\nErrors: not_found for an unknown or already deleted id; forbidden for a read-only key.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -576,7 +561,7 @@
     {
       "name": "list_broadcasts",
       "title": "List broadcasts",
-      "description": "List this account's broadcasts, or get one in detail. A broadcast is a public link where listeners follow a live transcription in their own language.\nUse: to find a broadcastId for start_broadcast or stop_broadcast, see which are on air, or (with broadcastId) a broadcast's recorded transcriptions and streams. Text: get_transcription; they also appear in list_transcriptions.\nBehaviour: free; most recently updated first, up to 500 per lifecycle, no paging.\nReturns: broadcasts (broadcastId, name, link, access, onAir, listenersNow, lastRecordedAt once it has recorded, archived for one in the trash; while on air transcriptionId, state, onAirSince). With broadcastId, one item that adds transcriptions (up to 20: transcriptionId, name, recording, lastRecordedAt) and streams (name, url). None: an empty list.\nErrors: not_found for an unknown broadcastId.",
+      "description": "List this account's broadcasts, or get one in detail. A broadcast is a public link where listeners follow a live transcription in their own language.\nUse: to find a broadcastId for start_broadcast, stop_broadcast or delete_broadcast, see which are on air, or (with broadcastId) a broadcast's recorded transcriptions and streams. Text: get_transcription; they also appear in list_transcriptions.\nBehaviour: free; most recently updated first, up to 500 per lifecycle, no paging.\nReturns: broadcasts (broadcastId, name, link, access, onAir, listenersNow, lastRecordedAt once it has recorded, archived for one in the trash; while on air transcriptionId, state, onAirSince). With broadcastId, one item that adds transcriptions (up to 20: transcriptionId, name, recording, lastRecordedAt) and streams (name, url). None: an empty list.\nErrors: not_found for an unknown broadcastId.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -611,7 +596,7 @@
     {
       "name": "start_broadcast",
       "title": "Start a broadcast",
-      "description": "Start live transcription and translation of a stream playing now, on a public link listeners open in their own language.\nUse: a live stream (YouTube live, internet radio, HLS, Icecast). A recording that has ended: transcribe. Reading it while it runs: get_transcription.\nList price: $0.60 an hour while it runs, billed per second; Pay as you go bills at least 5 minutes per transcription. Listeners and translations are free. It runs until stop_broadcast or the stream ends.\nTranscriptions running at once per account: 5 on Pay as you go, 50 on Premium; past that a start is refused with quota_exceeded.\nBehaviour: each call starts a new run unless it repeats an idempotencyKey; omitting broadcastId makes a new broadcast with a new link.\nReturns: broadcastId, name, link (anyone who opens it reads, or with spokenTranslations also hears, the stream in their language), transcriptionId, state.\nErrors: invalid_state (with link) when already on air, invalid_options for a non-http(s) address, insufficient_credit (with topUpUrl), quota_exceeded, not_found for an unknown broadcastId, forbidden for a key without the write and recordings:publish scopes.",
+      "description": "Start live transcription and translation of a stream playing now, on a public link listeners open in their own language.\nUse: a stream playing now. A recording that has ended: create_transcription. Reading it while it runs: get_transcription.\nArguments: streamUrl must be live when called; the same streamUrl on the same broadcast reuses its stream. broadcastId (from list_broadcasts) reruns an existing broadcast on its old link, and then name is ignored; without it a new broadcast is made, named name or the stream's host. spokenLanguage is a code like en (omit to detect). spokenTranslations true adds audio of each translation. idempotencyKey: any string you choose, reused only to retry this same call.\nList price: $0.60 an hour while it runs, billed per second; Pay as you go bills at least 5 minutes per transcription. Listeners and translations are free. It runs until stop_broadcast or the stream ends.\nTranscriptions running at once per account: 5 on Pay as you go, 50 on Premium; past that a start is refused with quota_exceeded.\nBehaviour: each call starts a new run unless it repeats an idempotencyKey; omitting broadcastId makes a new broadcast with a new link.\nReturns: broadcastId, name, link (anyone who opens it reads, or with spokenTranslations also hears, the stream in their language), transcriptionId, state.\nErrors: invalid_state (with link) when already on air, invalid_options for a non-http(s) address, insufficient_credit (with topUpUrl), quota_exceeded, not_found for an unknown broadcastId, forbidden for a key without the write and recordings:publish scopes.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -652,7 +637,7 @@
             "type": "boolean"
           },
           "streamUrl": {
-            "description": "http(s) address of a stream playing now: a YouTube live, an internet radio station, an HLS (.m3u8) or Icecast stream. A recording that has ended goes to transcribe instead.",
+            "description": "http(s) address of a stream playing now: a YouTube live, an internet radio station, an HLS (.m3u8) or Icecast stream. A recording that has ended goes to create_transcription instead.",
             "examples": [
               "https://www.youtube.com/watch?v=jfKfPfyJRdk",
               "https://stream.example.org/radio.m3u8"
@@ -678,7 +663,7 @@
     {
       "name": "stop_broadcast",
       "title": "Stop a broadcast",
-      "description": "Stop the live transcription a broadcast is running, which also stops its billing.\nUse: when the event is over. To remove the transcript afterwards: delete_transcription.\nBehaviour: free. The transcript is kept (get_transcription and get_summary work on it once state is done); the broadcastId and its link stay, ready for the next start_broadcast.\nReturns: the stopped transcription's status (transcriptionId, name, kind live, state finishing then done, startedAt, endedAt, durationS) with broadcastId and link.\nErrors: invalid_state when not on air, not_found for an unknown broadcastId, forbidden for a key without the recordings:publish scope.",
+      "description": "Stop the live transcription a broadcast is running, which also stops its billing.\nUse: when the event is over. To remove the transcript afterwards: delete_transcription; the broadcast and its link: delete_broadcast.\nArguments: broadcastId of a broadcast on air: from start_broadcast's result, or list_broadcasts (onAir true); not the transcriptionId. A second call is refused with invalid_state and changes nothing, so a retry is safe.\nBehaviour: free. The transcript is kept (get_transcription and get_summary work on it once state is done); the broadcastId and its link stay, ready for the next start_broadcast.\nReturns: the stopped transcription's status (transcriptionId, name, kind live, state finishing then done, startedAt, endedAt, durationS) with broadcastId and link.\nErrors: invalid_state when not on air, not_found for an unknown broadcastId, forbidden for a key without the recordings:publish scope.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -700,6 +685,35 @@
         "title": "Stop a broadcast",
         "readOnlyHint": false,
         "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "delete_broadcast",
+      "title": "Delete a broadcast",
+      "description": "Move a broadcast to the trash: its public link and stream addresses stop working for listeners.\nUse: a broadcast that will not run again. For 30 days it can be restored from the trash in the VocalStack Dashboard (list_broadcasts with lifecycle archived lists it); after that the broadcast is erased for good. Ending a live run: stop_broadcast.\nArguments: broadcastId from list_broadcasts or start_broadcast; not a transcriptionId.\nBehaviour: free. A broadcast on air is refused: stop it first (stop_broadcast). The transcriptions it recorded are not deleted: while it is in the trash they leave list_transcriptions with it, get_transcription still reads them by id, and delete_transcription deletes one. Deleting again changes nothing.\nReturns: broadcastId, name, deleted true, deletedAt, restorableUntil.\nErrors: invalid_state while on air; not_found for an unknown broadcastId; forbidden for a read-only key.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "broadcastId": {
+            "description": "A broadcastId from list_broadcasts or start_broadcast, of a broadcast that is not on air.",
+            "examples": [
+              "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a"
+            ],
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "broadcastId"
+        ],
+        "type": "object"
+      },
+      "annotations": {
+        "title": "Delete a broadcast",
+        "readOnlyHint": false,
+        "destructiveHint": true,
         "idempotentHint": true,
         "openWorldHint": false
       }

@@ -97,7 +97,7 @@ function only(method, path) {
 }
 
 function seen() {
-  return fake.requests.filter((r) => r.path !== "/v1/languages").map((r) => `${r.method} ${r.path}`);
+  return fake.requests.filter((r) => r.path !== "/v1/languages" && !(r.method === "GET" && r.path.endsWith("/share-links"))).map((r) => `${r.method} ${r.path}`);
 }
 
 test("initialize carries the stored instructions and this package's version", () => {
@@ -112,14 +112,13 @@ test("tools/list is exactly the hosted definitions: fifteen tools", async () => 
   assert.deepEqual(
     tools.map((t) => t.name),
     [
-      "transcribe",
+      "create_transcription",
       "get_transcription",
       "list_transcriptions",
       "search_transcriptions",
       "get_summary",
       "rename_speaker",
       "delete_transcription",
-      "restore_transcription",
       "set_cloned_voices",
       "list_speakers",
       "save_speaker",
@@ -127,6 +126,7 @@ test("tools/list is exactly the hosted definitions: fifteen tools", async () => 
       "list_broadcasts",
       "start_broadcast",
       "stop_broadcast",
+      "delete_broadcast",
     ],
   );
 });
@@ -141,7 +141,7 @@ test("every request carries the key, the user agent and asks for JSON", async ()
 });
 
 test("an unknown tool, or one the hosted refactor removed, is a protocol error", async () => {
-  for (const name of ["nope", "transcribe_url", "transcribe_file", "wait_for_transcription", "translate_transcription", "search_by_meaning", "get_broadcast", "list_voices"]) {
+  for (const name of ["nope", "transcribe", "restore_transcription", "transcribe_url", "transcribe_file", "wait_for_transcription", "translate_transcription", "search_by_meaning", "get_broadcast", "list_voices"]) {
     await assert.rejects(call(client, name, {}), (e) => {
       assert.equal(e.code, -32602);
       assert.match(e.message, new RegExp(`unknown tool "${name}"`));
@@ -167,15 +167,15 @@ test("arguments are held to the schema, worded as the hosted server words them",
   assert.equal(r.content[0].text, "`waitS` must be an integer from 0 to 60");
   r = await call(client, "get_transcription", { transcriptionId: TID, waitS: -1 });
   assert.equal(r.content[0].text, "`waitS` must be an integer from 0 to 60");
-  r = await call(client, "transcribe", { url: "https://x", shareLink: "yes" });
+  r = await call(client, "create_transcription", { url: "https://x", shareLink: "yes" });
   assert.equal(r.content[0].text, "`shareLink` must be true or false");
   r = await call(client, "search_transcriptions", { query: "a" });
   assert.equal(r.content[0].text, "`query` must be 2 to 200 characters");
   r = await call(client, "search_transcriptions", { query: "ab", mode: "sideways" });
   assert.equal(r.content[0].text, "`mode` must be one of words, meaning");
-  r = await call(client, "transcribe", { url: "https://x", idempotencyKey: "has space" });
+  r = await call(client, "create_transcription", { url: "https://x", idempotencyKey: "has space" });
   assert.equal(r.content[0].text, "idempotencyKey must be 1 to 255 visible ASCII characters");
-  r = await call(client, "transcribe", { url: "https://x", timeoutS: 5 });
+  r = await call(client, "create_transcription", { url: "https://x", timeoutS: 5 });
   assert.equal(
     r.content[0].text,
     "unknown argument `timeoutS`; this tool takes endS, fileBase64, filename, idempotencyKey, mimeType, name, shareLink, speakerLabels, spokenLanguage, startS, summary, url",
@@ -183,10 +183,10 @@ test("arguments are held to the schema, worded as the hosted server words them",
   assert.deepEqual(seen(), []);
 });
 
-test("transcribe with url posts the link and options, with the idempotency key, and returns the status", async () => {
+test("create_transcription with url posts the link and options, with the idempotency key, and returns the status", async () => {
   fake.on("POST", "/v1/transcriptions", { status: 201, body: tx() });
   fake.on("GET", `/v1/transcriptions/${TID}/share-links`, { body: { links: [{ url: "https://vocalstack.com/t/abc" }] } });
-  const r = await call(client, "transcribe", {
+  const r = await call(client, "create_transcription", {
     url: "https://example.com/episode-12.mp3",
     name: "Episode 12",
     spokenLanguage: "en",
@@ -224,10 +224,10 @@ test("transcribe with url posts the link and options, with the idempotency key, 
   assert.deepEqual(JSON.parse(r.content[0].text), r.structuredContent);
 });
 
-test("transcribe with url: defaults are speaker labels auto, no share link, no key; a replay says so; a missing job is fetched", async () => {
+test("create_transcription with url: defaults are speaker labels auto, no share link, no key; a replay says so; a missing job is fetched", async () => {
   fake.on("POST", "/v1/transcriptions", { status: 201, body: tx({ job: null }), headers: { "idempotent-replayed": "true" } });
   fake.on("GET", `/v1/transcriptions/${TID}/job`, { body: job("fetching") });
-  const r = await call(client, "transcribe", { url: "https://example.com/a.mp3", fileBase64: null });
+  const r = await call(client, "create_transcription", { url: "https://example.com/a.mp3", fileBase64: null });
   const [post] = only("POST", "/v1/transcriptions");
   assert.equal(post.headers["idempotency-key"], undefined);
   assert.deepEqual(post.body, { url: "https://example.com/a.mp3", shareLink: false, settings: { speakerLabels: "auto" } });
@@ -236,10 +236,10 @@ test("transcribe with url: defaults are speaker labels auto, no share link, no k
   assert.deepEqual(seen(), ["POST /v1/transcriptions", `GET /v1/transcriptions/${TID}/job`]);
 });
 
-test("transcribe with fileBase64 uploads the decoded file as multipart with its options", async () => {
+test("create_transcription with fileBase64 uploads the decoded file as multipart with its options", async () => {
   fake.on("POST", "/v1/transcriptions", { status: 201, body: tx({ job: job("queued", {}, { source: { kind: "upload", name: "meeting.m4a" } }) }) });
   const bytes = Buffer.from("ID3 fake audio bytes \u0000\u0001\u0002");
-  const r = await call(client, "transcribe", {
+  const r = await call(client, "create_transcription", {
     filename: "meeting.m4a",
     fileBase64: `data:audio/mp4;base64,${bytes.toString("base64").replace(/(.{8})/g, "$1\n")}`,
     mimeType: "audio/mp4",
@@ -260,7 +260,7 @@ test("transcribe with fileBase64 uploads the decoded file as multipart with its 
   assert.match(r.structuredContent.next, /^Call get_transcription with this transcriptionId and waitS/);
 });
 
-test("transcribe takes exactly one source: url, or fileBase64 with filename", async () => {
+test("create_transcription takes exactly one source: url, or fileBase64 with filename", async () => {
   const cases = [
     [{ url: "https://example.com/a.mp3", fileBase64: "AAAA", filename: "a.mp3" }, "give either `url` or `fileBase64`, not both"],
     [{ name: "Nothing" }, "give `url` (a public link) or `fileBase64` with `filename` (a file up to 10 MiB)"],
@@ -273,7 +273,7 @@ test("transcribe takes exactly one source: url, or fileBase64 with filename", as
     [{ fileBase64: 12, filename: "a.mp3" }, "`fileBase64` must be a string"],
   ];
   for (const [args, says] of cases) {
-    const r = await call(client, "transcribe", args);
+    const r = await call(client, "create_transcription", args);
     assert.equal(r.isError, true, JSON.stringify(args));
     assert.equal(r.structuredContent.error, "invalid_options", JSON.stringify(args));
     assert.equal(r.content[0].text, says, JSON.stringify(args));
@@ -281,31 +281,31 @@ test("transcribe takes exactly one source: url, or fileBase64 with filename", as
   assert.deepEqual(seen(), []);
 });
 
-test("transcribe refuses bad base64, an empty file and one over 10 MiB before any request", async () => {
-  let r = await call(client, "transcribe", { filename: "a.mp3", fileBase64: "AA*A" });
+test("create_transcription refuses bad base64, an empty file and one over 10 MiB before any request", async () => {
+  let r = await call(client, "create_transcription", { filename: "a.mp3", fileBase64: "AA*A" });
   assert.equal(r.structuredContent.error, "invalid_options");
   assert.match(r.content[0].text, /^fileBase64 is not valid base64/);
-  r = await call(client, "transcribe", { filename: "a.mp3", fileBase64: "@@@@" });
+  r = await call(client, "create_transcription", { filename: "a.mp3", fileBase64: "@@@@" });
   assert.match(r.content[0].text, /not valid base64/);
-  r = await call(client, "transcribe", { filename: "a.mp3", fileBase64: "data:audio/mpeg;base64," });
+  r = await call(client, "create_transcription", { filename: "a.mp3", fileBase64: "data:audio/mpeg;base64," });
   assert.equal(r.content[0].text, "`fileBase64` is required");
-  r = await call(client, "transcribe", { filename: "a.mp3", fileBase64: "====" });
+  r = await call(client, "create_transcription", { filename: "a.mp3", fileBase64: "====" });
   assert.equal(r.structuredContent.error, "invalid_options");
-  r = await call(client, "transcribe", { filename: "a.mp3", fileBase64: "" });
+  r = await call(client, "create_transcription", { filename: "a.mp3", fileBase64: "" });
   assert.equal(r.content[0].text, "`fileBase64` is required");
   const over = Buffer.alloc(10 * 1024 * 1024 + 1).toString("base64");
-  r = await call(client, "transcribe", { filename: "a.mp3", fileBase64: over });
+  r = await call(client, "create_transcription", { filename: "a.mp3", fileBase64: over });
   assert.equal(r.content[0].text, "the file is over 10 MiB; give `url` a link to it instead");
   const big = Buffer.alloc(10 * 1024 * 1024 + 1024).toString("base64");
-  r = await call(client, "transcribe", { filename: "a.mp3", fileBase64: big });
+  r = await call(client, "create_transcription", { filename: "a.mp3", fileBase64: big });
   assert.equal(r.content[0].text, "fileBase64 is over 10 MiB decoded; give `url` a link to the file instead");
   assert.deepEqual(seen(), []);
 });
 
-test("transcribe: an empty decoded file is invalid_audio", async () => {
-  const r = await call(client, "transcribe", { filename: "a.mp3", fileBase64: " \n " });
+test("create_transcription: an empty decoded file is invalid_audio", async () => {
+  const r = await call(client, "create_transcription", { filename: "a.mp3", fileBase64: " \n " });
   assert.equal(r.content[0].text, "`fileBase64` is required");
-  const e = await call(client, "transcribe", { filename: "a.mp3", fileBase64: "data:;base64,==" });
+  const e = await call(client, "create_transcription", { filename: "a.mp3", fileBase64: "data:;base64,==" });
   assert.equal(e.structuredContent.error, "invalid_audio");
   assert.equal(e.content[0].text, "the file is empty");
   assert.equal(e.structuredContent.status, 400);
@@ -314,7 +314,7 @@ test("transcribe: an empty decoded file is invalid_audio", async () => {
 test("a 10 MiB file goes through stdio and up in one request", async () => {
   fake.on("POST", "/v1/transcriptions", { status: 201, body: tx() });
   const bytes = Buffer.alloc(10 * 1024 * 1024, 7);
-  const r = await call(client, "transcribe", { filename: "big.wav", fileBase64: bytes.toString("base64") });
+  const r = await call(client, "create_transcription", { filename: "big.wav", fileBase64: bytes.toString("base64") });
   assert.equal(r.isError, undefined, r.content[0]?.text);
   const [post] = only("POST", "/v1/transcriptions");
   assert.equal(post.body.file.bytes.length, bytes.length);
@@ -855,43 +855,6 @@ test("delete_transcription refuses a live recording and a locked one, maps an un
   assert.deepEqual(r.structuredContent.details, { requiredScope: ["write"] });
 });
 
-test("restore_transcription checks the transcription, restores it and says so", async () => {
-  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ lifecycle: "archived" }) });
-  fake.on("POST", `/v1/transcriptions/${TID}/restore`, { body: tx({ lifecycle: "active", name: "Episode 12 (kept)" }) });
-  const r = await call(client, "restore_transcription", { transcriptionId: TID.toUpperCase() });
-  assert.equal(r.isError, undefined, r.content[0].text);
-  assert.deepEqual(seen(), [`GET /v1/transcriptions/${TID}`, `POST /v1/transcriptions/${TID}/restore`]);
-  assert.equal(fake.requests[1].headers.authorization, `Bearer ${KEY}`);
-  assert.equal(fake.requests[1].body, undefined);
-  assert.deepEqual(r.structuredContent, { name: "Episode 12 (kept)", restored: true, transcriptionId: TID });
-});
-
-test("restore_transcription: an unknown or erased id, a read-only key, bad arguments", async () => {
-  fake.on("GET", `/v1/transcriptions/${TID}`, apiError(404, "not_found", "transcription not found"));
-  let r = await call(client, "restore_transcription", { transcriptionId: TID });
-  assert.equal(r.structuredContent.error, "not_found");
-  assert.equal(r.content[0].text, "No transcription with that id for this account.");
-  assert.deepEqual(seen(), [`GET /v1/transcriptions/${TID}`]);
-  fake.reset();
-  fake.on("GET", `/v1/transcriptions/${TID}`, apiError(403, "forbidden", "not yours"));
-  r = await call(client, "restore_transcription", { transcriptionId: TID });
-  assert.equal(r.content[0].text, "No transcription with that id for this account.");
-  fake.reset();
-  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ lifecycle: "archived" }) });
-  fake.on("POST", `/v1/transcriptions/${TID}/restore`, apiError(403, "forbidden", 'API key lacks the "write" scope', { requiredScope: ["write"] }));
-  r = await call(client, "restore_transcription", { transcriptionId: TID });
-  assert.equal(r.structuredContent.error, "forbidden");
-  assert.deepEqual(r.structuredContent.details, { requiredScope: ["write"] });
-  fake.reset();
-  r = await call(client, "restore_transcription", { transcriptionId: "not-a-uuid" });
-  assert.equal(r.content[0].text, "`transcriptionId` must be a UUID");
-  r = await call(client, "restore_transcription", {});
-  assert.equal(r.content[0].text, "`transcriptionId` is required");
-  r = await call(client, "restore_transcription", { transcriptionId: TID, lifecycle: "all" });
-  assert.equal(r.content[0].text, "unknown argument `lifecycle`; this tool takes transcriptionId");
-  assert.equal(fake.requests.length, 0);
-});
-
 test("set_cloned_voices patches voiceCloning with the consent beside it", async () => {
   fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx() });
   fake.on("PATCH", `/v1/transcriptions/${TID}`, { body: tx({ settings: { speakerLabels: "auto", voiceCloning: true } }) });
@@ -937,7 +900,7 @@ test("set_cloned_voices: no consent, a deleted transcription, an unknown one, ba
   r = await call(client, "set_cloned_voices", { transcriptionId: TID });
   assert.equal(r.content[0].text, "`on` is required");
   r = await call(client, "set_cloned_voices", { transcriptionId: TID, on: true, voice: "x" });
-  assert.equal(r.content[0].text, "unknown argument `voice`; this tool takes consent, on, transcriptionId");
+  assert.equal(r.content[0].text, "unknown argument `voice`; this tool takes consent, on, speakerId, transcriptionId");
   assert.equal(fake.requests.length, 0);
 });
 
@@ -1253,9 +1216,194 @@ test("stop_broadcast: paused skips the pause; not on air is invalid_state", asyn
   assert.equal(r.structuredContent.status, 409);
 });
 
+test("get_transcription: the status carries shareUrl when the transcription has a share link, and nothing when the lookup fails", async () => {
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("done") }) });
+  fake.on("GET", `/v1/transcriptions/${TID}/share-links`, { body: { links: [{ url: "https://vocalstack.com/t/abc" }, { url: "https://vocalstack.com/t/def" }] } });
+  let r = await call(client, "get_transcription", { transcriptionId: TID, format: "none" });
+  assert.equal(r.isError, undefined, r.content[0].text);
+  assert.equal(only("GET", `/v1/transcriptions/${TID}/share-links`).length, 1);
+  assert.equal(r.structuredContent.status.shareUrl, "https://vocalstack.com/t/abc");
+  fake.reset();
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("done") }) });
+  fake.on("GET", `/v1/transcriptions/${TID}/share-links`, { body: { links: [] } });
+  r = await call(client, "get_transcription", { transcriptionId: TID, format: "none" });
+  assert.equal(r.structuredContent.status.shareUrl, undefined);
+  fake.reset();
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("done") }) });
+  fake.on("GET", `/v1/transcriptions/${TID}/share-links`, apiError(500, "internal", "boom"));
+  r = await call(client, "get_transcription", { transcriptionId: TID, format: "none" });
+  assert.equal(r.isError, undefined);
+  assert.equal(r.structuredContent.status.shareUrl, undefined);
+});
+
+test("rename_speaker with speakerId renames the saved speaker", async () => {
+  fake.on("PATCH", `/v1/speakers/${SPK}`, { body: saved({ name: "Maria L." }) });
+  const r = await call(client, "rename_speaker", { speakerId: SPK.toUpperCase(), name: "  Maria L. " });
+  assert.equal(r.isError, undefined, r.content[0].text);
+  assert.deepEqual(seen(), [`PATCH /v1/speakers/${SPK}`]);
+  assert.deepEqual(fake.requests[0].body, { name: "Maria L." });
+  assert.deepEqual(r.structuredContent, { name: "Maria L.", speakerId: SPK });
+});
+
+test("rename_speaker: exactly one target; a saved speaker's name is 1 to 60; unknown and read-only", async () => {
+  const msg = async (args) => (await call(client, "rename_speaker", args)).content[0].text;
+  assert.equal(await msg({ speakerId: SPK, speaker: 2, name: "A" }), "give either `speakerId` (a saved speaker) or `transcriptionId` with `speaker`, not both");
+  assert.equal(await msg({ speakerId: SPK, transcriptionId: TID, name: "A" }), "give either `speakerId` (a saved speaker) or `transcriptionId` with `speaker`, not both");
+  assert.equal(await msg({ transcriptionId: TID, name: "A" }), "`speaker` is required with `transcriptionId`");
+  assert.equal(await msg({ speaker: 2, name: "A" }), "`transcriptionId` is required with `speaker`");
+  assert.equal(await msg({ name: "A" }), "give `transcriptionId` with `speaker` (one transcription) or `speakerId` (a saved speaker)");
+  assert.equal(await msg({ speakerId: SPK }), "`name` is required");
+  assert.equal(await msg({ speakerId: SPK, name: "   " }), "a saved speaker's `name` must be 1 to 60 characters");
+  assert.equal(await msg({ speakerId: SPK, name: "é".repeat(61) }), "a saved speaker's `name` must be 1 to 60 characters");
+  assert.equal(await msg({ speakerId: SPK, name: 3 }), "`name` must be a string");
+  assert.equal(await msg({ speakerId: "s1", name: "A" }), "`speakerId` must be a UUID");
+  assert.equal(fake.requests.length, 0);
+  fake.on("PATCH", `/v1/speakers/${SPK}`, apiError(404, "not_found", "speaker not found"));
+  let r = await call(client, "rename_speaker", { speakerId: SPK, name: "A" });
+  assert.equal(r.structuredContent.error, "not_found");
+  assert.equal(r.content[0].text, "No saved speaker with that id for this account; list_speakers shows them.");
+  fake.reset();
+  fake.on("PATCH", `/v1/speakers/${SPK}`, apiError(403, "forbidden", "not yours"));
+  r = await call(client, "rename_speaker", { speakerId: SPK, name: "A" });
+  assert.equal(r.content[0].text, "No saved speaker with that id for this account; list_speakers shows them.");
+  fake.reset();
+  fake.on("PATCH", `/v1/speakers/${SPK}`, apiError(403, "forbidden", 'API key lacks the "write" scope', { requiredScope: ["write"] }));
+  r = await call(client, "rename_speaker", { speakerId: SPK, name: "A" });
+  assert.equal(r.structuredContent.error, "forbidden");
+  assert.deepEqual(r.structuredContent.details, { requiredScope: ["write"] });
+});
+
+test("set_cloned_voices with speakerId on: grants consent, switches a disabled clone on, reports the speaker", async () => {
+  fake.on("GET", `/v1/speakers/${SPK}`, { body: saved() });
+  fake.on("GET", `/v1/speakers/${SPK}`, { body: saved({ consent: "granted", voice: { id: SPK, state: "training", enabled: true } }) });
+  fake.on("POST", `/v1/speakers/${SPK}/consent`, { body: saved({ consent: "granted", voice: { id: SPK, state: "training", enabled: true } }) });
+  let r = await call(client, "set_cloned_voices", { speakerId: SPK.toUpperCase(), on: true, consent: true });
+  assert.equal(r.isError, undefined, r.content[0].text);
+  assert.deepEqual(seen(), [`GET /v1/speakers/${SPK}`, `POST /v1/speakers/${SPK}/consent`, `GET /v1/speakers/${SPK}`]);
+  assert.deepEqual(only("POST", `/v1/speakers/${SPK}/consent`)[0].body, { consent: "granted" });
+  assert.deepEqual(r.structuredContent, { clonedVoice: true, consent: "granted", name: "Maria Lopez", speakerId: SPK, voiceState: "training" });
+  fake.reset();
+  const off = { id: SPK, state: "ready", enabled: false };
+  fake.on("GET", `/v1/speakers/${SPK}`, { body: saved({ consent: "granted", voice: off }) });
+  fake.on("GET", `/v1/speakers/${SPK}`, { body: saved({ consent: "granted", voice: { ...off, enabled: true } }) });
+  fake.on("POST", `/v1/speakers/${SPK}/consent`, { body: saved({ consent: "granted", voice: off }) });
+  fake.on("PATCH", `/v1/speakers/${SPK}`, { body: saved({ consent: "granted", voice: { ...off, enabled: true } }) });
+  r = await call(client, "set_cloned_voices", { speakerId: SPK, on: true, consent: true });
+  assert.deepEqual(seen(), [`GET /v1/speakers/${SPK}`, `POST /v1/speakers/${SPK}/consent`, `PATCH /v1/speakers/${SPK}`, `GET /v1/speakers/${SPK}`]);
+  assert.deepEqual(only("PATCH", `/v1/speakers/${SPK}`)[0].body, { enabled: true });
+  assert.deepEqual(r.structuredContent, { clonedVoice: true, consent: "granted", name: "Maria Lopez", speakerId: SPK, voiceState: "ready" });
+});
+
+test("set_cloned_voices with speakerId off: switches the clone off and keeps it; nothing to switch sends no patch", async () => {
+  const on = { id: SPK, state: "ready", enabled: true };
+  fake.on("GET", `/v1/speakers/${SPK}`, { body: saved({ consent: "granted", voice: on }) });
+  fake.on("GET", `/v1/speakers/${SPK}`, { body: saved({ consent: "granted", voice: { ...on, enabled: false } }) });
+  fake.on("PATCH", `/v1/speakers/${SPK}`, { body: saved({ consent: "granted", voice: { ...on, enabled: false } }) });
+  let r = await call(client, "set_cloned_voices", { speakerId: SPK, on: false });
+  assert.equal(r.isError, undefined, r.content[0].text);
+  assert.deepEqual(seen(), [`GET /v1/speakers/${SPK}`, `PATCH /v1/speakers/${SPK}`, `GET /v1/speakers/${SPK}`]);
+  assert.deepEqual(only("PATCH", `/v1/speakers/${SPK}`)[0].body, { enabled: false });
+  assert.deepEqual(r.structuredContent, { clonedVoice: false, consent: "granted", name: "Maria Lopez", speakerId: SPK, voiceState: "ready" });
+  fake.reset();
+  fake.on("GET", `/v1/speakers/${SPK}`, { body: saved() });
+  r = await call(client, "set_cloned_voices", { speakerId: SPK, on: false, transcriptionId: null });
+  assert.deepEqual(seen(), [`GET /v1/speakers/${SPK}`, `GET /v1/speakers/${SPK}`]);
+  assert.deepEqual(r.structuredContent, { clonedVoice: false, consent: "pending", name: "Maria Lopez", speakerId: SPK });
+});
+
+test("set_cloned_voices with speakerId: exactly one target, consent, a refused speaker, no sample, unknown", async () => {
+  const msg = async (args) => (await call(client, "set_cloned_voices", args)).content[0].text;
+  assert.equal(await msg({ speakerId: SPK, transcriptionId: TID, on: false }), "give either `transcriptionId` (one transcription) or `speakerId` (a saved speaker), not both");
+  assert.equal(await msg({ on: true, consent: true }), "give `transcriptionId` (one transcription) or `speakerId` (a saved speaker)");
+  assert.equal(
+    await msg({ speakerId: SPK, on: true }),
+    "Turning a saved speaker's cloned voice on needs consent: true, confirming that person agreed to have their voice cloned.",
+  );
+  assert.equal(await msg({ speakerId: SPK, on: "yes" }), "`on` must be true or false");
+  assert.equal(await msg({ speakerId: "s1", on: false }), "`speakerId` must be a UUID");
+  assert.equal(fake.requests.length, 0);
+  fake.on("GET", `/v1/speakers/${SPK}`, { body: saved({ consent: "refused" }) });
+  let r = await call(client, "set_cloned_voices", { speakerId: SPK, on: true, consent: true });
+  assert.equal(r.structuredContent.error, "invalid_state");
+  assert.equal(
+    r.content[0].text,
+    "This speaker refused to be cloned and their audio was deleted; save them again from a transcription (save_speaker with consent) to clone them.",
+  );
+  assert.deepEqual(seen(), [`GET /v1/speakers/${SPK}`]);
+  fake.reset();
+  fake.on("GET", `/v1/speakers/${SPK}`, { body: saved() });
+  fake.on(
+    "POST",
+    `/v1/speakers/${SPK}/consent`,
+    apiError(409, "invalid_state", "this speaker has no sample stored to clone their voice from: save them again from a sample or a transcription"),
+  );
+  r = await call(client, "set_cloned_voices", { speakerId: SPK, on: true, consent: true });
+  assert.equal(r.structuredContent.error, "invalid_state");
+  assert.equal(r.content[0].text, "This saved speaker has no stored sample to clone their voice from; save them again from a transcription (save_speaker with consent).");
+  fake.reset();
+  fake.on("GET", `/v1/speakers/${SPK}`, apiError(404, "not_found", "speaker not found"));
+  r = await call(client, "set_cloned_voices", { speakerId: SPK, on: false });
+  assert.equal(r.structuredContent.error, "not_found");
+  assert.equal(r.content[0].text, "No saved speaker with that id for this account; list_speakers shows them.");
+  fake.reset();
+  fake.on("GET", `/v1/speakers/${SPK}`, { body: saved() });
+  fake.on("POST", `/v1/speakers/${SPK}/consent`, apiError(403, "forbidden", 'API key lacks the "write" scope', { requiredScope: ["write"] }));
+  r = await call(client, "set_cloned_voices", { speakerId: SPK, on: true, consent: true });
+  assert.equal(r.structuredContent.error, "forbidden");
+  assert.deepEqual(r.structuredContent.details, { requiredScope: ["write"] });
+});
+
+test("delete_broadcast checks the broadcast, archives it and returns when it can be restored", async () => {
+  fake.on("GET", `/v1/broadcasts/${BID}`, { body: bcast() });
+  fake.on("POST", `/v1/broadcasts/${BID}/archive`, {
+    body: bcast({ lifecycle: "archived", archivedAt: "2026-11-19T11:00:00Z", purgeAfter: "2026-12-19T11:00:00Z" }),
+  });
+  const r = await call(client, "delete_broadcast", { broadcastId: BID.toUpperCase() });
+  assert.equal(r.isError, undefined, r.content[0].text);
+  assert.deepEqual(seen(), [`GET /v1/broadcasts/${BID}`, `POST /v1/broadcasts/${BID}/archive`]);
+  assert.equal(fake.requests[1].body, undefined);
+  assert.deepEqual(r.structuredContent, {
+    broadcastId: BID,
+    deleted: true,
+    deletedAt: "2026-11-19T11:00:00Z",
+    name: "Sunday service",
+    restorableUntil: "2026-12-19T11:00:00Z",
+  });
+});
+
+test("delete_broadcast: on air is refused with the hosted wording; unknown, read-only, bad arguments", async () => {
+  fake.on("GET", `/v1/broadcasts/${BID}`, { body: bcast({ currentTranscription: { transcriptionId: TID, state: "live" } }) });
+  fake.on("POST", `/v1/broadcasts/${BID}/archive`, apiError(409, "invalid_state", "stop the recording first"));
+  let r = await call(client, "delete_broadcast", { broadcastId: BID });
+  assert.equal(r.structuredContent.error, "invalid_state");
+  assert.equal(r.structuredContent.status, 409);
+  assert.equal(r.content[0].text, "This broadcast is on air; stop it first (stop_broadcast), then delete it.");
+  assert.deepEqual(r.structuredContent.details, { broadcastId: BID });
+  fake.reset();
+  fake.on("GET", `/v1/broadcasts/${BID}`, apiError(404, "not_found", "broadcast not found"));
+  r = await call(client, "delete_broadcast", { broadcastId: BID });
+  assert.equal(r.structuredContent.error, "not_found");
+  assert.equal(r.content[0].text, "No broadcast with that id for this account.");
+  assert.deepEqual(seen(), [`GET /v1/broadcasts/${BID}`]);
+  fake.reset();
+  fake.on("GET", `/v1/broadcasts/${BID}`, { body: bcast() });
+  fake.on("POST", `/v1/broadcasts/${BID}/archive`, apiError(403, "forbidden", 'API key lacks the "write" scope', { requiredScope: ["write"] }));
+  r = await call(client, "delete_broadcast", { broadcastId: BID });
+  assert.equal(r.structuredContent.error, "forbidden");
+  assert.deepEqual(r.structuredContent.details, { requiredScope: ["write"] });
+  fake.reset();
+  r = await call(client, "delete_broadcast", { broadcastId: "b1" });
+  assert.equal(r.content[0].text, "`broadcastId` must be a UUID");
+  r = await call(client, "delete_broadcast", {});
+  assert.equal(r.content[0].text, "`broadcastId` is required");
+  r = await call(client, "delete_broadcast", { broadcastId: BID, transcriptionId: TID });
+  assert.equal(r.content[0].text, "unknown argument `transcriptionId`; this tool takes broadcastId");
+  assert.equal(fake.requests.length, 0);
+});
+
 test("API errors become tool errors with code, plain message, retryable, retryAfterS and topUpUrl", async () => {
   fake.on("POST", "/v1/transcriptions", apiError(402, "insufficient_credit", "Not enough credit.", { balance: 0, required: 5 }));
-  let r = await call(client, "transcribe", { url: "https://example.com/a.mp3" });
+  let r = await call(client, "create_transcription", { url: "https://example.com/a.mp3" });
   assert.equal(r.isError, true);
   assert.deepEqual(r.structuredContent, {
     details: { balance: 0, required: 5 },
@@ -1272,7 +1420,7 @@ test("API errors become tool errors with code, plain message, retryable, retryAf
   );
   fake.reset();
   fake.on("POST", "/v1/transcriptions", apiError(422, "idempotency_key_reused", "this Idempotency-Key was used with a different request"));
-  r = await call(client, "transcribe", { url: "https://example.com/a.mp3", idempotencyKey: "k" });
+  r = await call(client, "create_transcription", { url: "https://example.com/a.mp3", idempotencyKey: "k" });
   assert.equal(r.structuredContent.error, "idempotency_key_reused");
   assert.equal(r.structuredContent.status, 422);
   fake.reset();
@@ -1327,7 +1475,7 @@ test("when the language list cannot be read, lang is left to the API to refuse",
     assert.equal(r.content[0].text, '`lang` "xx" is not a language this API translates into');
     assert.deepEqual(
       other.requests.map((q) => `${q.method} ${q.path}`),
-      ["GET /v1/languages", `GET /v1/transcriptions/${TID}`, `GET /v1/transcriptions/${TID}/transcript`, `GET /v1/transcriptions/${TID}/translation`],
+      ["GET /v1/languages", `GET /v1/transcriptions/${TID}`, `GET /v1/transcriptions/${TID}/share-links`, `GET /v1/transcriptions/${TID}/transcript`, `GET /v1/transcriptions/${TID}/translation`],
     );
   } finally {
     await c.close();

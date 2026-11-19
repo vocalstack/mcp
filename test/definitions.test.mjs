@@ -63,6 +63,6 @@ test("the README's tool list is the first sentence of each description in src/to
   assert.ok(withTools(readme, SYNCED.tools) === readme, "the README's tool list is stale: run npm run sync-tools");
   const lines = toolLines(DEFS.tools);
   assert.equal(lines.length, 15);
-  assert.equal(lines[0], "- `transcribe`: Start transcribing a finished recording, from a public link or a file sent inline; returns a transcriptionId at once, before any text.");
+  assert.equal(lines[0], "- `create_transcription`: Start transcribing a finished recording, from a public link or a file sent inline; returns a transcriptionId at once, before any text.");
   for (const l of lines) assert.match(l, /^- `[a-z_]+`: [^\n]+[.!?]$/);
 });
