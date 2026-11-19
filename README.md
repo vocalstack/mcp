@@ -1,8 +1,8 @@
 # @vocalstack/mcp
 
+[![vocalstack/mcp MCP server](https://glama.ai/mcp/servers/vocalstack/mcp/badges/score.svg)](https://glama.ai/mcp/servers/vocalstack/mcp)
 [![VocalStack MCP connector](https://glama.ai/mcp/connectors/com.vocalstack/mcp/badges/score.svg)](https://glama.ai/mcp/connectors/com.vocalstack/mcp)
 [![mcptry](https://mcptry.com/badge/com.vocalstack/mcp)](https://mcptry.com/servers/com.vocalstack/mcp)
-[![vocalstack/mcp MCP server](https://glama.ai/mcp/servers/vocalstack/mcp/badges/score.svg)](https://glama.ai/mcp/servers/vocalstack/mcp)
 
 VocalStack's MCP server. It runs on your machine (stdio) and works with VocalStack's public API using your API key, so any MCP client can transcribe, translate, search and summarize audio and video, and run live broadcasts that listeners follow in their own language.
 
