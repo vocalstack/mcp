@@ -1,6 +1,7 @@
 # @vocalstack/mcp
 
 [![VocalStack MCP connector](https://glama.ai/mcp/connectors/com.vocalstack/mcp/badges/score.svg)](https://glama.ai/mcp/connectors/com.vocalstack/mcp)
+[![mcptry](https://mcptry.com/badge/com.vocalstack/mcp)](https://mcptry.com/servers/com.vocalstack/mcp)
 
 A local bridge to VocalStack's hosted MCP server. Use it in MCP clients that only run local (stdio) servers, such as Claude Desktop, Cursor and Windsurf, to transcribe, translate, search and summarize audio and video, and to run live broadcasts.
 
