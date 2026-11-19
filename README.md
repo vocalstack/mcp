@@ -1,5 +1,7 @@
 # @vocalstack/mcp
 
+[![VocalStack MCP connector](https://glama.ai/mcp/connectors/com.vocalstack/mcp/badges/score.svg)](https://glama.ai/mcp/connectors/com.vocalstack/mcp)
+
 A local bridge to VocalStack's hosted MCP server. Use it in MCP clients that only run local (stdio) servers, such as Claude Desktop, Cursor and Windsurf, to transcribe, translate, search and summarize audio and video, and to run live broadcasts.
 
 If your client supports remote MCP servers, you don't need this package: add `https://api.vocalstack.com/v1/mcp` as a remote server and sign in with your VocalStack account when asked. Nothing to install.
