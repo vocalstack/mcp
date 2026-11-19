@@ -5,7 +5,9 @@ import { FakeApi, apiError, connect, call, KEY, DEFS, VERSION } from "./helpers.
 const TID = "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a";
 const BID = "0190f0e0-0000-7000-8000-00000000000b";
 const SRC = "0190f0e0-0000-7000-8000-0000000000aa";
+const SPK = "0190f0e0-0000-7000-8000-0000000000c1";
 const T0 = "2026-11-19T10:00:00Z";
+const LANGS = ["en", "es", "fr", "de", "ja"];
 
 const job = (state, progress = {}, extra = {}) => ({
   transcriptionId: TID,
@@ -22,8 +24,9 @@ const tx = (extra = {}) => ({
   name: "Episode 12",
   createdAt: T0,
   state: "idle",
+  lifecycle: "active",
   spokenLanguage: "en",
-  settings: { speakerLabels: "auto" },
+  settings: { speakerLabels: "auto", voiceCloning: false },
   broadcasts: [],
   job: job("queued"),
   ...extra,
@@ -71,9 +74,14 @@ const bcast = (extra = {}) => ({
 
 const fake = new FakeApi();
 let client;
+let languageCalls = 0;
 
 before(async () => {
   await fake.start();
+  fake.always("GET", "/v1/languages", () => {
+    languageCalls++;
+    return { body: { languages: [], transcription: LANGS, translation: LANGS, voice: ["en"] } };
+  });
   client = await connect(fake);
 });
 
@@ -89,7 +97,7 @@ function only(method, path) {
 }
 
 function seen() {
-  return fake.requests.map((r) => `${r.method} ${r.path}`);
+  return fake.requests.filter((r) => r.path !== "/v1/languages").map((r) => `${r.method} ${r.path}`);
 }
 
 test("initialize carries the stored instructions and this package's version", () => {
@@ -98,10 +106,29 @@ test("initialize carries the stored instructions and this package's version", ()
   assert.deepEqual(client.getServerCapabilities()?.tools, { listChanged: false });
 });
 
-test("tools/list is exactly tools.json", async () => {
+test("tools/list is exactly the hosted definitions: fifteen tools", async () => {
   const { tools } = await client.listTools();
   assert.deepEqual(tools, DEFS.tools);
-  assert.equal(tools.length, 18);
+  assert.deepEqual(
+    tools.map((t) => t.name),
+    [
+      "transcribe",
+      "get_transcription",
+      "list_transcriptions",
+      "search_transcriptions",
+      "get_summary",
+      "rename_speaker",
+      "delete_transcription",
+      "restore_transcription",
+      "set_cloned_voices",
+      "list_speakers",
+      "save_speaker",
+      "delete_speaker",
+      "list_broadcasts",
+      "start_broadcast",
+      "stop_broadcast",
+    ],
+  );
 });
 
 test("every request carries the key, the user agent and asks for JSON", async () => {
@@ -113,19 +140,21 @@ test("every request carries the key, the user agent and asks for JSON", async ()
   assert.equal(r.headers.accept, "application/json");
 });
 
-test("an unknown tool is a protocol error", async () => {
-  await assert.rejects(call(client, "nope", {}), (e) => {
-    assert.equal(e.code, -32602);
-    assert.match(e.message, /unknown tool "nope"/);
-    return true;
-  });
+test("an unknown tool, or one the hosted refactor removed, is a protocol error", async () => {
+  for (const name of ["nope", "transcribe_url", "transcribe_file", "wait_for_transcription", "translate_transcription", "search_by_meaning", "get_broadcast", "list_voices"]) {
+    await assert.rejects(call(client, name, {}), (e) => {
+      assert.equal(e.code, -32602);
+      assert.match(e.message, new RegExp(`unknown tool "${name}"`));
+      return true;
+    });
+  }
 });
 
 test("arguments are held to the schema, worded as the hosted server words them", async () => {
   let r = await call(client, "get_transcription", { transcriptionId: TID, bogus: 1 });
   assert.equal(r.isError, true);
   assert.equal(r.structuredContent.error, "invalid_options");
-  assert.equal(r.content[0].text, "unknown argument `bogus`; this tool takes format, includeWords, limit, offset, transcriptionId");
+  assert.equal(r.content[0].text, "unknown argument `bogus`; this tool takes format, includeWords, lang, limit, offset, transcriptionId, waitS");
   r = await call(client, "get_transcription", {});
   assert.equal(r.content[0].text, "`transcriptionId` is required");
   r = await call(client, "get_transcription", { transcriptionId: "x" });
@@ -134,19 +163,30 @@ test("arguments are held to the schema, worded as the hosted server words them",
   assert.equal(r.content[0].text, "`limit` must be an integer from 1 to 2000");
   r = await call(client, "get_transcription", { transcriptionId: TID, format: "pdf" });
   assert.equal(r.content[0].text, "`format` must be one of text, segments, none");
-  r = await call(client, "transcribe_url", { url: "https://x", shareLink: "yes" });
+  r = await call(client, "get_transcription", { transcriptionId: TID, waitS: 61 });
+  assert.equal(r.content[0].text, "`waitS` must be an integer from 0 to 60");
+  r = await call(client, "get_transcription", { transcriptionId: TID, waitS: -1 });
+  assert.equal(r.content[0].text, "`waitS` must be an integer from 0 to 60");
+  r = await call(client, "transcribe", { url: "https://x", shareLink: "yes" });
   assert.equal(r.content[0].text, "`shareLink` must be true or false");
   r = await call(client, "search_transcriptions", { query: "a" });
   assert.equal(r.content[0].text, "`query` must be 2 to 200 characters");
-  r = await call(client, "transcribe_url", { url: "https://x", idempotencyKey: "has space" });
+  r = await call(client, "search_transcriptions", { query: "ab", mode: "sideways" });
+  assert.equal(r.content[0].text, "`mode` must be one of words, meaning");
+  r = await call(client, "transcribe", { url: "https://x", idempotencyKey: "has space" });
   assert.equal(r.content[0].text, "idempotencyKey must be 1 to 255 visible ASCII characters");
-  assert.equal(fake.requests.length, 0);
+  r = await call(client, "transcribe", { url: "https://x", timeoutS: 5 });
+  assert.equal(
+    r.content[0].text,
+    "unknown argument `timeoutS`; this tool takes endS, fileBase64, filename, idempotencyKey, mimeType, name, shareLink, speakerLabels, spokenLanguage, startS, summary, url",
+  );
+  assert.deepEqual(seen(), []);
 });
 
-test("transcribe_url posts the link and options, with the idempotency key, and returns the status", async () => {
+test("transcribe with url posts the link and options, with the idempotency key, and returns the status", async () => {
   fake.on("POST", "/v1/transcriptions", { status: 201, body: tx() });
   fake.on("GET", `/v1/transcriptions/${TID}/share-links`, { body: { links: [{ url: "https://vocalstack.com/t/abc" }] } });
-  const r = await call(client, "transcribe_url", {
+  const r = await call(client, "transcribe", {
     url: "https://example.com/episode-12.mp3",
     name: "Episode 12",
     spokenLanguage: "en",
@@ -160,6 +200,7 @@ test("transcribe_url posts the link and options, with the idempotency key, and r
   assert.equal(r.isError, undefined);
   const [post] = only("POST", "/v1/transcriptions");
   assert.equal(post.headers["idempotency-key"], "ep-12");
+  assert.match(post.headers["content-type"], /^application\/json/);
   assert.deepEqual(post.body, {
     url: "https://example.com/episode-12.mp3",
     name: "Episode 12",
@@ -172,7 +213,7 @@ test("transcribe_url posts the link and options, with the idempotency key, and r
     createdAt: T0,
     kind: "file",
     name: "Episode 12",
-    next: "Call wait_for_transcription with this transcriptionId.",
+    next: "Call get_transcription with this transcriptionId and waitS (up to 60) to wait for the text.",
     progress: { pct: 0, processedS: 0, segmentsDone: 0, totalS: 120 },
     shareUrl: "https://vocalstack.com/t/abc",
     source: { durationS: 120, format: "mp3", kind: "url", name: "episode.mp3" },
@@ -183,60 +224,97 @@ test("transcribe_url posts the link and options, with the idempotency key, and r
   assert.deepEqual(JSON.parse(r.content[0].text), r.structuredContent);
 });
 
-test("transcribe_url defaults: speaker labels auto, no share link, no key; a replay says so", async () => {
-  fake.on("POST", "/v1/transcriptions", { status: 201, body: tx(), headers: { "idempotent-replayed": "true" } });
-  const r = await call(client, "transcribe_url", { url: "https://example.com/a.mp3" });
+test("transcribe with url: defaults are speaker labels auto, no share link, no key; a replay says so; a missing job is fetched", async () => {
+  fake.on("POST", "/v1/transcriptions", { status: 201, body: tx({ job: null }), headers: { "idempotent-replayed": "true" } });
+  fake.on("GET", `/v1/transcriptions/${TID}/job`, { body: job("fetching") });
+  const r = await call(client, "transcribe", { url: "https://example.com/a.mp3", fileBase64: null });
   const [post] = only("POST", "/v1/transcriptions");
   assert.equal(post.headers["idempotency-key"], undefined);
   assert.deepEqual(post.body, { url: "https://example.com/a.mp3", shareLink: false, settings: { speakerLabels: "auto" } });
   assert.equal(r.structuredContent.replayed, true);
-  assert.deepEqual(seen(), ["POST /v1/transcriptions"]);
+  assert.equal(r.structuredContent.state, "fetching");
+  assert.deepEqual(seen(), ["POST /v1/transcriptions", `GET /v1/transcriptions/${TID}/job`]);
 });
 
-test("transcribe_file uploads the decoded file as multipart with its options", async () => {
+test("transcribe with fileBase64 uploads the decoded file as multipart with its options", async () => {
   fake.on("POST", "/v1/transcriptions", { status: 201, body: tx({ job: job("queued", {}, { source: { kind: "upload", name: "meeting.m4a" } }) }) });
   const bytes = Buffer.from("ID3 fake audio bytes \u0000\u0001\u0002");
-  const r = await call(client, "transcribe_file", {
+  const r = await call(client, "transcribe", {
     filename: "meeting.m4a",
     fileBase64: `data:audio/mp4;base64,${bytes.toString("base64").replace(/(.{8})/g, "$1\n")}`,
     mimeType: "audio/mp4",
+    summary: true,
     idempotencyKey: "m-1",
+    url: null,
   });
   assert.equal(r.isError, undefined, r.content[0].text);
   const [post] = only("POST", "/v1/transcriptions");
   assert.match(post.headers["content-type"], /^multipart\/form-data; boundary=/);
   assert.equal(post.headers["idempotency-key"], "m-1");
-  assert.deepEqual(JSON.parse(post.body.options), { settings: { speakerLabels: "auto" }, shareLink: false });
+  assert.deepEqual(JSON.parse(post.body.options), { settings: { speakerLabels: "auto", summary: true, title: true }, shareLink: false });
   assert.equal(post.body.file.name, "meeting.m4a");
   assert.equal(post.body.file.type, "audio/mp4");
   assert.deepEqual(post.body.file.bytes, bytes);
   assert.equal(r.structuredContent.kind, "file");
   assert.deepEqual(r.structuredContent.source, { kind: "upload", name: "meeting.m4a" });
+  assert.match(r.structuredContent.next, /^Call get_transcription with this transcriptionId and waitS/);
 });
 
-test("transcribe_file refuses bad base64, an empty file and one over 10 MiB before any request", async () => {
-  let r = await call(client, "transcribe_file", { filename: "a.mp3", fileBase64: "AA*A" });
+test("transcribe takes exactly one source: url, or fileBase64 with filename", async () => {
+  const cases = [
+    [{ url: "https://example.com/a.mp3", fileBase64: "AAAA", filename: "a.mp3" }, "give either `url` or `fileBase64`, not both"],
+    [{ name: "Nothing" }, "give `url` (a public link) or `fileBase64` with `filename` (a file up to 10 MiB)"],
+    [{ url: null, fileBase64: null }, "give `url` (a public link) or `fileBase64` with `filename` (a file up to 10 MiB)"],
+    [{ url: "https://example.com/a.mp3", filename: "a.mp3" }, "`filename` goes with `fileBase64`, not with `url`"],
+    [{ url: "https://example.com/a.mp3", mimeType: "audio/mpeg" }, "`mimeType` goes with `fileBase64`, not with `url`"],
+    [{ fileBase64: "AAAA" }, "`filename` is required"],
+    [{ url: "   " }, "`url` is required"],
+    [{ url: `https://example.com/${"a".repeat(2040)}` }, "`url` is longer than 2048 characters"],
+    [{ fileBase64: 12, filename: "a.mp3" }, "`fileBase64` must be a string"],
+  ];
+  for (const [args, says] of cases) {
+    const r = await call(client, "transcribe", args);
+    assert.equal(r.isError, true, JSON.stringify(args));
+    assert.equal(r.structuredContent.error, "invalid_options", JSON.stringify(args));
+    assert.equal(r.content[0].text, says, JSON.stringify(args));
+  }
+  assert.deepEqual(seen(), []);
+});
+
+test("transcribe refuses bad base64, an empty file and one over 10 MiB before any request", async () => {
+  let r = await call(client, "transcribe", { filename: "a.mp3", fileBase64: "AA*A" });
   assert.equal(r.structuredContent.error, "invalid_options");
   assert.match(r.content[0].text, /^fileBase64 is not valid base64/);
-  r = await call(client, "transcribe_file", { filename: "a.mp3", fileBase64: "data:audio/mpeg;base64," });
+  r = await call(client, "transcribe", { filename: "a.mp3", fileBase64: "@@@@" });
+  assert.match(r.content[0].text, /not valid base64/);
+  r = await call(client, "transcribe", { filename: "a.mp3", fileBase64: "data:audio/mpeg;base64," });
   assert.equal(r.content[0].text, "`fileBase64` is required");
-  r = await call(client, "transcribe_file", { filename: "a.mp3", fileBase64: "====" });
+  r = await call(client, "transcribe", { filename: "a.mp3", fileBase64: "====" });
   assert.equal(r.structuredContent.error, "invalid_options");
-  r = await call(client, "transcribe_file", { filename: "a.mp3", fileBase64: "" });
+  r = await call(client, "transcribe", { filename: "a.mp3", fileBase64: "" });
   assert.equal(r.content[0].text, "`fileBase64` is required");
   const over = Buffer.alloc(10 * 1024 * 1024 + 1).toString("base64");
-  r = await call(client, "transcribe_file", { filename: "a.mp3", fileBase64: over });
-  assert.equal(r.content[0].text, "the file is over 10 MiB; give transcribe_url a link to it instead");
+  r = await call(client, "transcribe", { filename: "a.mp3", fileBase64: over });
+  assert.equal(r.content[0].text, "the file is over 10 MiB; give `url` a link to it instead");
   const big = Buffer.alloc(10 * 1024 * 1024 + 1024).toString("base64");
-  r = await call(client, "transcribe_file", { filename: "a.mp3", fileBase64: big });
-  assert.equal(r.content[0].text, "fileBase64 is over 10 MiB decoded; give transcribe_url a link to the file instead");
-  assert.equal(fake.requests.length, 0);
+  r = await call(client, "transcribe", { filename: "a.mp3", fileBase64: big });
+  assert.equal(r.content[0].text, "fileBase64 is over 10 MiB decoded; give `url` a link to the file instead");
+  assert.deepEqual(seen(), []);
+});
+
+test("transcribe: an empty decoded file is invalid_audio", async () => {
+  const r = await call(client, "transcribe", { filename: "a.mp3", fileBase64: " \n " });
+  assert.equal(r.content[0].text, "`fileBase64` is required");
+  const e = await call(client, "transcribe", { filename: "a.mp3", fileBase64: "data:;base64,==" });
+  assert.equal(e.structuredContent.error, "invalid_audio");
+  assert.equal(e.content[0].text, "the file is empty");
+  assert.equal(e.structuredContent.status, 400);
 });
 
 test("a 10 MiB file goes through stdio and up in one request", async () => {
   fake.on("POST", "/v1/transcriptions", { status: 201, body: tx() });
   const bytes = Buffer.alloc(10 * 1024 * 1024, 7);
-  const r = await call(client, "transcribe_file", { filename: "big.wav", fileBase64: bytes.toString("base64") });
+  const r = await call(client, "transcribe", { filename: "big.wav", fileBase64: bytes.toString("base64") });
   assert.equal(r.isError, undefined, r.content[0]?.text);
   const [post] = only("POST", "/v1/transcriptions");
   assert.equal(post.body.file.bytes.length, bytes.length);
@@ -251,6 +329,7 @@ test("get_transcription pages readable text with speakers and marks a running on
   assert.equal(r.structuredContent.segmentCount, 3);
   assert.equal(r.structuredContent.partial, true);
   assert.equal(r.structuredContent.nextOffset, undefined);
+  assert.equal(r.structuredContent.timedOut, undefined, "no wait asked, none reported");
   assert.equal(r.structuredContent.status.state, "transcribing");
   assert.equal(r.structuredContent.status.kind, "file");
   r = await call(client, "get_transcription", { transcriptionId: TID, offset: 1, limit: 1 });
@@ -263,6 +342,7 @@ test("get_transcription pages readable text with speakers and marks a running on
   r = await call(client, "get_transcription", { transcriptionId: TID, format: "none" });
   assert.deepEqual(Object.keys(r.structuredContent), ["status"]);
   assert.equal(only("GET", `/v1/transcriptions/${TID}/transcript`).length, 3);
+  assert.equal(only("GET", `/v1/transcriptions/${TID}/job`).length, 0);
 });
 
 test("get_transcription: a live transcription reports kind live; labels off drops speakers", async () => {
@@ -317,7 +397,7 @@ test("segments carry speakerNumber: the server's numbers first, then unnumbered 
   );
   r = await call(client, "get_transcription", { transcriptionId: TID });
   assert.equal(r.structuredContent.text.split("\n")[1], "[00:03] Speaker 1: Hi Ana.");
-  r = await call(client, "translate_transcription", { transcriptionId: TID, lang: "es", format: "segments" });
+  r = await call(client, "get_transcription", { transcriptionId: TID, lang: "es", format: "segments" });
   assert.deepEqual(
     r.structuredContent.segments.map((s) => [s.speakerNumber, s.speakerName, s.text]),
     [
@@ -350,19 +430,41 @@ test("an unknown id is not_found in the hosted wording", async () => {
   });
 });
 
-test("wait_for_transcription polls the job each second until it is done, with progress", async () => {
+test("get_transcription with waitS 0 answers at once and reports no wait", async () => {
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("transcribing") }) });
+  fake.on("GET", `/v1/transcriptions/${TID}/transcript`, { body: snapshot() });
+  const t0 = Date.now();
+  const r = await call(client, "get_transcription", { transcriptionId: TID, waitS: 0 });
+  assert.ok(Date.now() - t0 < 900);
+  assert.equal(r.structuredContent.timedOut, undefined);
+  assert.equal(r.structuredContent.partial, true);
+  assert.deepEqual(seen(), [`GET /v1/transcriptions/${TID}`, `GET /v1/transcriptions/${TID}/transcript`]);
+});
+
+test("get_transcription with waitS polls the job each second until it is done, with progress, then reads the text in the same call", async () => {
   fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("fetching", { pct: 0, fetchedBytes: 1_500_000, fetchTotalBytes: 3_000_000 }) }) });
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("done", { pct: 100, processedS: 120 }, { finishedAt: "2026-11-19T10:05:00Z" }) }) });
   fake.on("GET", `/v1/transcriptions/${TID}/job`, { body: job("transcribing", { pct: 50, processedS: 60 }) });
   fake.on("GET", `/v1/transcriptions/${TID}/job`, { body: job("done", { pct: 100, processedS: 120 }, { finishedAt: "2026-11-19T10:05:00Z" }) });
+  fake.on("GET", `/v1/transcriptions/${TID}/transcript`, { body: snapshot() });
   const updates = [];
   const t0 = Date.now();
-  const r = await call(client, "wait_for_transcription", { transcriptionId: TID }, { onprogress: (p) => updates.push(p) });
+  const r = await call(client, "get_transcription", { transcriptionId: TID, waitS: 50 }, { onprogress: (p) => updates.push(p) });
   const took = Date.now() - t0;
   assert.ok(took >= 1800 && took < 5000, `took ${took} ms`);
-  assert.equal(r.structuredContent.state, "done");
+  assert.equal(r.isError, undefined, r.content[0].text);
   assert.equal(r.structuredContent.timedOut, false);
-  assert.equal(r.structuredContent.finishedAt, "2026-11-19T10:05:00Z");
-  assert.equal(only("GET", `/v1/transcriptions/${TID}/job`).length, 2);
+  assert.equal(r.structuredContent.status.state, "done");
+  assert.equal(r.structuredContent.status.finishedAt, "2026-11-19T10:05:00Z");
+  assert.equal(r.structuredContent.text, "[00:00] Ana: Hello there.\n[00:03] Speaker 2: Hi Ana.\n[01:15] Ana: Bye.");
+  assert.equal(r.structuredContent.partial, undefined);
+  assert.deepEqual(seen(), [
+    `GET /v1/transcriptions/${TID}`,
+    `GET /v1/transcriptions/${TID}/job`,
+    `GET /v1/transcriptions/${TID}/job`,
+    `GET /v1/transcriptions/${TID}`,
+    `GET /v1/transcriptions/${TID}/transcript`,
+  ]);
   assert.deepEqual(
     updates.map((u) => [u.progress, u.total, u.message]),
     [
@@ -372,20 +474,127 @@ test("wait_for_transcription polls the job each second until it is done, with pr
   );
 });
 
-test("wait_for_transcription times out with timedOut true, and returns a live one at once", async () => {
+test("get_transcription with waitS: a wait that runs out is timedOut true, not an error; format none waits without reading", async () => {
   fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("queued") }) });
   fake.on("GET", `/v1/transcriptions/${TID}/job`, { body: job("queued") });
-  let r = await call(client, "wait_for_transcription", { transcriptionId: TID, timeoutS: 1 });
+  const t0 = Date.now();
+  const r = await call(client, "get_transcription", { transcriptionId: TID, waitS: 1, format: "none" });
+  assert.ok(Date.now() - t0 >= 900, "it waited");
+  assert.equal(r.isError, undefined);
   assert.equal(r.structuredContent.timedOut, true);
-  assert.equal(r.structuredContent.state, "queued");
-  fake.reset();
+  assert.equal(r.structuredContent.status.state, "queued");
+  assert.deepEqual(Object.keys(r.structuredContent).sort(), ["status", "timedOut"]);
+  assert.equal(only("GET", `/v1/transcriptions/${TID}/transcript`).length, 0);
+  assert.ok(only("GET", `/v1/transcriptions/${TID}/job`).length >= 1);
+});
+
+test("get_transcription with waitS: a live one and a finished one do not wait (timedOut false) and are read at once", async () => {
   fake.on("GET", `/v1/transcriptions/${TID}`, { body: liveTx("live") });
-  r = await call(client, "wait_for_transcription", { transcriptionId: TID });
-  assert.equal(r.structuredContent.kind, "live");
+  fake.on("GET", `/v1/transcriptions/${TID}/transcript`, { body: snapshot({ state: "live" }) });
+  let t0 = Date.now();
+  let r = await call(client, "get_transcription", { transcriptionId: TID, waitS: 30 });
+  assert.ok(Date.now() - t0 < 900);
   assert.equal(r.structuredContent.timedOut, false);
+  assert.equal(r.structuredContent.status.kind, "live");
+  assert.equal(r.structuredContent.partial, true);
+  assert.deepEqual(seen(), [`GET /v1/transcriptions/${TID}`, `GET /v1/transcriptions/${TID}/transcript`]);
+  fake.reset();
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("failed", {}, { error: "the link could not be read" }) }) });
+  fake.on("GET", `/v1/transcriptions/${TID}/transcript`, { body: snapshot({ segments: [], sentences: [] }) });
+  t0 = Date.now();
+  r = await call(client, "get_transcription", { transcriptionId: TID, waitS: 30 });
+  assert.ok(Date.now() - t0 < 900);
+  assert.equal(r.structuredContent.timedOut, false);
+  assert.equal(r.structuredContent.status.error, "the link could not be read");
+  assert.equal(r.structuredContent.text, "");
+  assert.equal(r.structuredContent.segmentCount, 0);
+  assert.equal(only("GET", `/v1/transcriptions/${TID}/job`).length, 0);
+});
+
+test("get_transcription with waitS: at most four waits are open for this key at once", async () => {
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("transcribing") }) });
+  fake.on("GET", `/v1/transcriptions/${TID}/job`, { body: job("transcribing") });
+  const waits = Array.from({ length: 4 }, () => call(client, "get_transcription", { transcriptionId: TID, waitS: 2, format: "none" }));
+  await new Promise((r) => setTimeout(r, 500));
+  const t0 = Date.now();
+  const fifth = await call(client, "get_transcription", { transcriptionId: TID, waitS: 2, format: "none" });
+  assert.ok(Date.now() - t0 < 1000, "refused at once");
+  assert.equal(fifth.isError, true);
+  assert.equal(fifth.structuredContent.error, "rate_limited");
+  assert.equal(fifth.structuredContent.status, 429);
+  assert.equal(fifth.structuredContent.retryable, true);
+  assert.equal(fifth.structuredContent.retryAfterS, 5);
+  assert.deepEqual(fifth.structuredContent.details, { limit: 4, retryAfterS: 5 });
+  assert.equal(fifth.content[0].text, "this key already has 4 waits open; let one finish first. Wait 5 seconds before trying again.");
+  for (const r of await Promise.all(waits)) assert.equal(r.structuredContent.timedOut, true);
+  const again = await call(client, "get_transcription", { transcriptionId: TID, waitS: 1, format: "none" });
+  assert.equal(again.structuredContent.timedOut, true, "the slots are free again");
+});
+
+test("get_transcription with lang translates only the sentences on the page that lack it", async () => {
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("done") }) });
+  fake.on("GET", `/v1/transcriptions/${TID}/transcript`, { body: snapshot() });
+  fake.on("GET", `/v1/transcriptions/${TID}/translation`, { body: { lang: "es", translations: { 11: "Hola Ana." } } });
+  fake.on("GET", `/v1/transcriptions/${TID}/translation`, { body: { lang: "es", translations: { 13: "Adiós." } } });
+  const r = await call(client, "get_transcription", { transcriptionId: TID, lang: "ES", limit: 2 });
+  assert.deepEqual(only("GET", `/v1/transcriptions/${TID}/translation`)[0].query, { lang: "es", sentences: "11" });
+  assert.equal(r.structuredContent.status.state, "done");
+  const { status, ...rest } = r.structuredContent;
+  assert.deepEqual(rest, {
+    lang: "es",
+    nextOffset: 2,
+    segmentCount: 3,
+    text: "[00:00] Ana: Hola.\n[00:03] Speaker 2: Hola Ana.",
+    translated: true,
+  });
+  const s = await call(client, "get_transcription", { transcriptionId: TID, lang: "es", format: "segments", offset: 2 });
+  assert.deepEqual(only("GET", `/v1/transcriptions/${TID}/translation`)[1].query, { lang: "es", sentences: "13" });
+  assert.deepEqual(s.structuredContent.segments, [{ end: 80, language: "es", speaker: 0, speakerName: "Ana", speakerNumber: 1, start: 75.4, text: "Adiós." }]);
+  const n = await call(client, "get_transcription", { transcriptionId: TID, lang: "es", format: "none" });
+  assert.deepEqual(Object.keys(n.structuredContent), ["status"]);
+});
+
+test("get_transcription with lang: the spoken language comes back untranslated", async () => {
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("done") }) });
+  fake.on("GET", `/v1/transcriptions/${TID}/transcript`, { body: snapshot() });
+  const r = await call(client, "get_transcription", { transcriptionId: TID, lang: "en" });
+  assert.equal(r.structuredContent.translated, false);
+  assert.equal(r.structuredContent.lang, "en");
+  assert.equal(r.structuredContent.segmentCount, 3);
+  assert.equal(r.structuredContent.text, "[00:00] Ana: Hello there.\n[00:03] Speaker 2: Hi Ana.\n[01:15] Ana: Bye.");
+  assert.equal(only("GET", `/v1/transcriptions/${TID}/translation`).length, 0);
+});
+
+test("get_transcription with lang refuses an open live transcription and an unfinished file, unless a wait ran out", async () => {
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: liveTx("live") });
+  let r = await call(client, "get_transcription", { transcriptionId: TID, lang: "es" });
+  assert.equal(r.structuredContent.error, "invalid_state");
+  assert.equal(r.content[0].text, "the live transcription is still running; read the text so far without lang, or stop it (stop_broadcast) and translate it then");
+  r = await call(client, "get_transcription", { transcriptionId: TID, lang: "es", waitS: 5 });
+  assert.equal(r.structuredContent.error, "invalid_state", "a live one never waits, so nothing ran out");
+  fake.reset();
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("transcribing") }) });
+  r = await call(client, "get_transcription", { transcriptionId: TID, lang: "es" });
+  assert.equal(r.content[0].text, "the transcription is transcribing; wait until it is done (get_transcription with waitS)");
   assert.deepEqual(seen(), [`GET /v1/transcriptions/${TID}`]);
-  r = await call(client, "wait_for_transcription", { transcriptionId: TID, timeoutS: 61 });
-  assert.equal(r.content[0].text, "`timeoutS` must be an integer from 1 to 60");
+  fake.on("GET", `/v1/transcriptions/${TID}/job`, { body: job("transcribing") });
+  r = await call(client, "get_transcription", { transcriptionId: TID, lang: "es", waitS: 1 });
+  assert.equal(r.isError, undefined, "a wait that runs out is not an error");
+  assert.equal(r.structuredContent.timedOut, true);
+  assert.deepEqual(Object.keys(r.structuredContent).sort(), ["status", "timedOut"]);
+  assert.equal(only("GET", `/v1/transcriptions/${TID}/transcript`).length, 0);
+});
+
+test("get_transcription with lang: an unsupported language and includeWords are refused before any request", async () => {
+  let r = await call(client, "get_transcription", { transcriptionId: TID, lang: "xx-nope" });
+  assert.equal(r.structuredContent.error, "invalid_options");
+  assert.equal(r.content[0].text, '`lang` "xx-nope" is not a language this API translates into');
+  r = await call(client, "get_transcription", { transcriptionId: TID, lang: "es", includeWords: true, format: "segments" });
+  assert.equal(r.structuredContent.error, "invalid_options");
+  assert.equal(r.content[0].text, "`includeWords` is for the original language; leave it out with `lang`");
+  r = await call(client, "get_transcription", { transcriptionId: TID, lang: "  " });
+  assert.equal(r.structuredContent.error, "not_found", "a blank lang is no lang");
+  assert.deepEqual(seen(), [`GET /v1/transcriptions/${TID}`]);
 });
 
 test("list_transcriptions maps file and live rows and fills the page across cursors", async () => {
@@ -419,18 +628,18 @@ test("list_transcriptions: a bad cursor is named", async () => {
   assert.equal(r.content[0].text, "`cursor` is not one this tool gave out");
 });
 
-test("search_transcriptions checks the transcription, then searches", async () => {
+const wordsHits = {
+  query: "budget",
+  queryEn: "budget",
+  more: false,
+  hits: [
+    { transcriptionId: TID, linkName: "Episode 12", linkCode: "abc", mediaStart: 12.5, wallStart: 12.5, speaker: 1, text: "The budget.", score: 0.9, live: false, sentenceId: 4, rendered: "El presupuesto.", recordedAt: T0 },
+  ],
+};
+
+test("search_transcriptions (mode words, the default) checks the transcription, then searches", async () => {
   fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx() });
-  fake.on("GET", "/v1/search", {
-    body: {
-      query: "budget",
-      queryEn: "budget",
-      more: false,
-      hits: [
-        { transcriptionId: TID, linkName: "Episode 12", linkCode: "abc", mediaStart: 12.5, wallStart: 12.5, speaker: 1, text: "The budget.", score: 0.9, live: false, sentenceId: 4, rendered: "El presupuesto.", recordedAt: T0 },
-      ],
-    },
-  });
+  fake.on("GET", "/v1/search", { body: wordsHits });
   const r = await call(client, "search_transcriptions", { query: " budget ", transcriptionId: TID, lang: "es", limit: 5 });
   assert.deepEqual(seen(), [`GET /v1/transcriptions/${TID}`, "GET /v1/search"]);
   assert.deepEqual(only("GET", "/v1/search")[0].query, { q: "budget", transcription: TID, lang: "es", limit: "5" });
@@ -439,20 +648,26 @@ test("search_transcriptions checks the transcription, then searches", async () =
     query: "budget",
     queryEn: "budget",
   });
+  fake.requests = [];
+  const w = await call(client, "search_transcriptions", { query: "budget", mode: "words" });
+  assert.deepEqual(seen(), ["GET /v1/search"]);
+  assert.deepEqual(only("GET", "/v1/search")[0].query, { q: "budget", limit: "20" });
+  assert.deepEqual(w.structuredContent, r.structuredContent);
 });
 
-test("search_by_meaning returns passages and what is left this hour", async () => {
-  fake.on("GET", "/v1/search/vector", {
-    body: {
-      query: "hiring",
-      state: "ready",
-      allowance: { limit: 60, remaining: 59, resetsAt: null },
-      hits: [
-        { transcriptionId: TID, linkName: "Episode 12", linkCode: "abc", mediaStart: 30, wallStart: 30, speaker: 0, text: "We hire.", score: 1, live: true, sentenceId: 1, vector: true, similarity: 0.81234, passage: { text: "We hire two people.", mediaStart: 28, mediaEnd: 40 } },
-      ],
-    },
-  });
-  const r = await call(client, "search_by_meaning", { query: "What about hiring?" });
+const vectorHits = {
+  query: "hiring",
+  state: "ready",
+  allowance: { limit: 60, remaining: 59, resetsAt: null },
+  hits: [
+    { transcriptionId: TID, linkName: "Episode 12", linkCode: "abc", mediaStart: 30, wallStart: 30, speaker: 0, text: "We hire.", score: 1, live: true, sentenceId: 1, vector: true, similarity: 0.81234, passage: { text: "We hire two people.", mediaStart: 28, mediaEnd: 40 } },
+  ],
+};
+
+test("search_transcriptions mode meaning returns passages and what is left this hour", async () => {
+  fake.on("GET", "/v1/search/vector", { body: vectorHits });
+  let r = await call(client, "search_transcriptions", { query: "What about hiring?", mode: "meaning" });
+  assert.deepEqual(seen(), ["GET /v1/search/vector"]);
   assert.deepEqual(only("GET", "/v1/search/vector")[0].query, { q: "What about hiring?" });
   assert.deepEqual(r.structuredContent, {
     passages: [{ live: true, mediaEnd: 40, mediaStart: 28, name: "Episode 12", similarity: 0.812, text: "We hire two people.", transcriptionId: TID }],
@@ -460,6 +675,34 @@ test("search_by_meaning returns passages and what is left this hour", async () =
     searchesLeftThisHour: 59,
     state: "ready",
   });
+  fake.reset();
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx() });
+  fake.on("GET", "/v1/search/vector", { body: { query: "x y", state: "off", allowance: { limit: null, remaining: null }, hits: [] } });
+  r = await call(client, "search_transcriptions", { query: "x y", mode: "meaning", transcriptionId: TID });
+  assert.deepEqual(seen(), [`GET /v1/transcriptions/${TID}`, "GET /v1/search/vector"]);
+  assert.deepEqual(only("GET", "/v1/search/vector")[0].query, { q: "x y", transcription: TID });
+  assert.deepEqual(r.structuredContent, { passages: [], query: "x y", state: "off" });
+});
+
+test("search_transcriptions mode meaning refuses lang and limit, and an unknown transcriptionId", async () => {
+  let r = await call(client, "search_transcriptions", { query: "hello", mode: "meaning", lang: "en" });
+  assert.equal(r.structuredContent.error, "invalid_options");
+  assert.equal(r.content[0].text, "`lang` applies to mode words only; leave it out with mode meaning");
+  r = await call(client, "search_transcriptions", { query: "hello", mode: "meaning", limit: 5 });
+  assert.equal(r.content[0].text, "`limit` applies to mode words only; leave it out with mode meaning");
+  r = await call(client, "search_transcriptions", { query: "hello", mode: "meaning", lang: null, limit: null, transcriptionId: "nope" });
+  assert.equal(r.content[0].text, "`transcriptionId` must be a UUID");
+  assert.deepEqual(seen(), []);
+  fake.on("GET", `/v1/transcriptions/${TID}`, apiError(404, "not_found", "transcription not found"));
+  r = await call(client, "search_transcriptions", { query: "hello", mode: "meaning", transcriptionId: TID });
+  assert.equal(r.structuredContent.error, "not_found");
+  assert.equal(r.content[0].text, "No transcription with that id for this account.");
+  assert.deepEqual(seen(), [`GET /v1/transcriptions/${TID}`]);
+  fake.reset();
+  fake.on("GET", "/v1/search/vector", apiError(429, "rate_limited", "Too many searches by meaning this hour.", { retryAfterS: 120 }, true));
+  r = await call(client, "search_transcriptions", { query: "hello", mode: "meaning" });
+  assert.equal(r.structuredContent.retryAfterS, 120);
+  assert.equal(r.content[0].text, "Too many searches by meaning this hour. Wait 120 seconds before trying again.");
 });
 
 test("get_summary reads a ready summary in a language", async () => {
@@ -471,21 +714,40 @@ test("get_summary reads a ready summary in a language", async () => {
   assert.equal(only("POST", `/v1/transcriptions/${TID}/summarize`).length, 0);
 });
 
+test("get_summary refuses a language the API does not translate into", async () => {
+  const r = await call(client, "get_summary", { transcriptionId: TID, lang: "klingon" });
+  assert.equal(r.structuredContent.error, "invalid_options");
+  assert.equal(r.content[0].text, '`lang` "klingon" is not a language this API translates into');
+  assert.deepEqual(seen(), []);
+});
+
 test("get_summary asks for one when a finished transcription has none", async () => {
   fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("done") }) });
   fake.on("GET", `/v1/transcriptions/${TID}/summary`, { body: { state: "not_requested" } });
   fake.on("POST", `/v1/transcriptions/${TID}/summarize`, { body: { state: "pending" } });
-  const r = await call(client, "get_summary", { transcriptionId: TID });
+  let r = await call(client, "get_summary", { transcriptionId: TID });
   assert.deepEqual(r.structuredContent, { message: "The summary is being written; ask again in a few seconds.", state: "pending" });
   assert.equal(only("POST", `/v1/transcriptions/${TID}/summarize`).length, 1);
+  fake.reset();
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("done") }) });
+  fake.on("GET", `/v1/transcriptions/${TID}/summary`, { body: { state: "not_requested" } });
+  fake.on("POST", `/v1/transcriptions/${TID}/summarize`, apiError(403, "forbidden", "API key lacks the \"write\" scope", { requiredScope: ["write"] }));
+  r = await call(client, "get_summary", { transcriptionId: TID });
+  assert.equal(r.structuredContent.error, "forbidden");
+  assert.equal(
+    r.content[0].text,
+    "This transcription has no summary yet, and starting one needs the write scope; this credential can only read an existing summary.",
+  );
 });
 
 test("get_summary: running, failed and short transcriptions", async () => {
   fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("transcribing") }) });
   fake.on("GET", `/v1/transcriptions/${TID}/summary`, { body: { state: "not_requested" } });
   let r = await call(client, "get_summary", { transcriptionId: TID });
-  assert.equal(r.structuredContent.state, "pending");
-  assert.match(r.structuredContent.message, /still running/);
+  assert.deepEqual(r.structuredContent, {
+    message: "The transcription is still running; wait for it (get_transcription with waitS), then ask again.",
+    state: "pending",
+  });
   fake.reset();
   fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("failed") }) });
   fake.on("GET", `/v1/transcriptions/${TID}/summary`, { body: { state: "unavailable" } });
@@ -499,74 +761,184 @@ test("get_summary: running, failed and short transcriptions", async () => {
   assert.deepEqual(r.structuredContent, { message: "Transcriptions shorter than a minute are not summarised.", state: "not_requested" });
 });
 
-test("translate_transcription translates only the sentences on the page that lack it", async () => {
-  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("done") }) });
-  fake.on("GET", `/v1/transcriptions/${TID}/transcript`, { body: snapshot() });
-  fake.on("GET", `/v1/transcriptions/${TID}/translation`, { body: { lang: "es", translations: { 11: "Hola Ana." } } });
-  fake.on("GET", `/v1/transcriptions/${TID}/translation`, { body: { lang: "es", translations: { 13: "Adiós." } } });
-  const r = await call(client, "translate_transcription", { transcriptionId: TID, lang: "es", limit: 2 });
-  assert.deepEqual(only("GET", `/v1/transcriptions/${TID}/translation`)[0].query, { lang: "es", sentences: "11" });
-  assert.deepEqual(r.structuredContent, {
-    lang: "es",
-    nextOffset: 2,
-    segmentCount: 3,
-    text: "[00:00] Ana: Hola.\n[00:03] Speaker 2: Hola Ana.",
-    translated: true,
-  });
-  const s = await call(client, "translate_transcription", { transcriptionId: TID, lang: "es", format: "segments", offset: 2 });
-  assert.deepEqual(only("GET", `/v1/transcriptions/${TID}/translation`)[1].query, { lang: "es", sentences: "13" });
-  assert.deepEqual(s.structuredContent.segments, [{ end: 80, language: "es", speaker: 0, speakerName: "Ana", speakerNumber: 1, start: 75.4, text: "Adiós." }]);
+test("rename_speaker puts the trimmed name on the speaker's number", async () => {
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx() });
+  fake.on("PUT", `/v1/transcriptions/${TID}/appearances/2`, { body: { ok: true } });
+  const r = await call(client, "rename_speaker", { transcriptionId: TID.toUpperCase(), speaker: 2, name: "  Maria Lopez " });
+  assert.equal(r.isError, undefined, r.content[0].text);
+  assert.deepEqual(seen(), [`GET /v1/transcriptions/${TID}`, `PUT /v1/transcriptions/${TID}/appearances/2`]);
+  const put = fake.requests[1];
+  assert.match(put.headers["content-type"], /^application\/json/);
+  assert.deepEqual(put.body, { name: "Maria Lopez" });
+  assert.deepEqual(r.structuredContent, { name: "Maria Lopez", speaker: 2, transcriptionId: TID });
 });
 
-test("translate_transcription: the spoken language comes back untranslated", async () => {
-  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("done") }) });
-  fake.on("GET", `/v1/transcriptions/${TID}/transcript`, { body: snapshot() });
-  const r = await call(client, "translate_transcription", { transcriptionId: TID, lang: "en-GB" });
-  assert.equal(r.structuredContent.translated, false);
-  assert.equal(r.structuredContent.lang, "en-gb");
-  assert.equal(r.structuredContent.segmentCount, 3);
-  assert.equal(only("GET", `/v1/transcriptions/${TID}/translation`).length, 0);
+test("rename_speaker: an empty name clears it; a long one is cut to 80 characters", async () => {
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx() });
+  fake.on("PUT", `/v1/transcriptions/${TID}/appearances/1`, { body: { ok: true } });
+  let r = await call(client, "rename_speaker", { transcriptionId: TID, speaker: 1, name: "   " });
+  assert.deepEqual(fake.requests[1].body, { name: null });
+  assert.deepEqual(r.structuredContent, { name: null, speaker: 1, transcriptionId: TID });
+  fake.requests = [];
+  r = await call(client, "rename_speaker", { transcriptionId: TID, speaker: 1, name: "é".repeat(90) });
+  assert.deepEqual(fake.requests[1].body, { name: "é".repeat(80) });
+  assert.equal(r.structuredContent.name, "é".repeat(80));
 });
 
-test("translate_transcription refuses an open live transcription and an unfinished file", async () => {
-  fake.on("GET", `/v1/transcriptions/${TID}`, { body: liveTx("live") });
-  let r = await call(client, "translate_transcription", { transcriptionId: TID, lang: "es" });
-  assert.equal(r.structuredContent.error, "invalid_state");
-  assert.equal(
-    r.content[0].text,
-    "the live transcription is still running; read the text so far with get_transcription, or stop it (stop_broadcast) and translate it then",
-  );
+test("rename_speaker: a number the transcription lacks, an unknown transcription, bad arguments", async () => {
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx() });
+  fake.on("PUT", `/v1/transcriptions/${TID}/appearances/7`, apiError(404, "not_found", "this transcription has no speaker 7"));
+  let r = await call(client, "rename_speaker", { transcriptionId: TID, speaker: 7, name: "Ana" });
+  assert.equal(r.structuredContent.error, "not_found");
+  assert.equal(r.content[0].text, "This transcription has no Speaker 7; get_transcription shows the speaker numbers.");
   fake.reset();
-  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("transcribing") }) });
-  r = await call(client, "translate_transcription", { transcriptionId: TID, lang: "es" });
-  assert.equal(r.content[0].text, "the transcription is transcribing; wait until it is done (wait_for_transcription)");
-  assert.deepEqual(seen(), [`GET /v1/transcriptions/${TID}`]);
+  fake.on("GET", `/v1/transcriptions/${TID}`, apiError(403, "forbidden", "not yours"));
+  r = await call(client, "rename_speaker", { transcriptionId: TID, speaker: 1, name: "Ana" });
+  assert.equal(r.content[0].text, "No transcription with that id for this account.");
+  fake.reset();
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx() });
+  fake.on("PUT", `/v1/transcriptions/${TID}/appearances/1`, apiError(403, "forbidden", "this key lacks the write scope"));
+  r = await call(client, "rename_speaker", { transcriptionId: TID, speaker: 1, name: "Ana" });
+  assert.equal(r.structuredContent.error, "forbidden");
+  fake.reset();
+  r = await call(client, "rename_speaker", { transcriptionId: TID, speaker: 0, name: "Ana" });
+  assert.equal(r.content[0].text, "`speaker` must be an integer from 1 to 1000");
+  r = await call(client, "rename_speaker", { transcriptionId: TID, speaker: 1.5, name: "Ana" });
+  assert.equal(r.content[0].text, "`speaker` must be an integer from 1 to 1000");
+  r = await call(client, "rename_speaker", { transcriptionId: TID, speaker: 1, name: 3 });
+  assert.equal(r.content[0].text, '`name` must be a string ("" clears the name)');
+  r = await call(client, "rename_speaker", { transcriptionId: TID, speaker: 1 });
+  assert.equal(r.content[0].text, "`name` is required");
+  assert.equal(fake.requests.length, 0);
 });
 
-test("translate_transcription: a language the API does not translate into", async () => {
-  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("done") }) });
-  fake.on("GET", `/v1/transcriptions/${TID}/transcript`, { body: snapshot() });
-  fake.on("GET", `/v1/transcriptions/${TID}/translation`, apiError(400, "invalid_options", "lang is a translation target"));
-  const r = await call(client, "translate_transcription", { transcriptionId: TID, lang: "xx" });
-  assert.equal(r.content[0].text, '`lang` "xx" is not a language this API translates into');
-});
-
-test("list_voices maps the catalogue and makes preview links absolute", async () => {
-  fake.on("GET", "/v1/voices/available", {
-    body: {
-      lang: "en",
-      voices: [
-        { id: "v1", name: "Ava", default: true, cloned: false, quality: 3, gender: "female", accent: "us", previewUrl: "/v1/voices/v1/preview", speakers: 0 },
-        { id: "clone:x", name: "Ana", default: false, cloned: true, quality: 2, previewUrl: null, speakers: 0 },
-      ],
-    },
+test("delete_transcription checks the transcription, archives it and returns when it can be restored", async () => {
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx() });
+  fake.on("POST", `/v1/transcriptions/${TID}/archive`, {
+    body: tx({ lifecycle: "archived", archivedAt: "2026-11-19T11:00:00Z", purgeAfter: "2026-12-19T11:00:00Z" }),
   });
-  const r = await call(client, "list_voices", { lang: "en" });
-  assert.deepEqual(only("GET", "/v1/voices/available")[0].query, { lang: "en" });
-  assert.deepEqual(r.structuredContent.voices, [
-    { accent: "us", cloned: false, default: true, gender: "female", id: "v1", name: "Ava", previewUrl: `${fake.url}/v1/voices/v1/preview`, quality: 3 },
-    { cloned: true, default: false, id: "clone:x", name: "Ana", quality: 2 },
-  ]);
+  const r = await call(client, "delete_transcription", { transcriptionId: TID.toUpperCase() });
+  assert.equal(r.isError, undefined, r.content[0].text);
+  assert.deepEqual(seen(), [`GET /v1/transcriptions/${TID}`, `POST /v1/transcriptions/${TID}/archive`]);
+  assert.equal(fake.requests[1].body, undefined);
+  assert.deepEqual(r.structuredContent, {
+    deleted: true,
+    deletedAt: "2026-11-19T11:00:00Z",
+    name: "Episode 12",
+    restorableUntil: "2026-12-19T11:00:00Z",
+    transcriptionId: TID,
+  });
+});
+
+test("delete_transcription refuses a live recording and a locked one, maps an unknown id, passes a read-only key's refusal", async () => {
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx() });
+  fake.on("POST", `/v1/transcriptions/${TID}/archive`, apiError(409, "invalid_state", "stop the recording first"));
+  let r = await call(client, "delete_transcription", { transcriptionId: TID });
+  assert.equal(r.structuredContent.error, "invalid_state");
+  assert.equal(r.structuredContent.status, 409);
+  assert.equal(r.content[0].text, "This transcription is still recording live; stop it first (stop_broadcast for a broadcast), then delete it.");
+  fake.reset();
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx() });
+  fake.on("POST", `/v1/transcriptions/${TID}/archive`, apiError(409, "invalid_state", "this transcription is locked; unlock it before archiving it"));
+  r = await call(client, "delete_transcription", { transcriptionId: TID });
+  assert.equal(r.content[0].text, "this transcription is locked; unlock it before archiving it");
+  fake.reset();
+  fake.on("GET", `/v1/transcriptions/${TID}`, apiError(404, "not_found", "transcription not found"));
+  r = await call(client, "delete_transcription", { transcriptionId: TID });
+  assert.equal(r.content[0].text, "No transcription with that id for this account.");
+  assert.deepEqual(seen(), [`GET /v1/transcriptions/${TID}`]);
+  fake.reset();
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx() });
+  fake.on("POST", `/v1/transcriptions/${TID}/archive`, apiError(403, "forbidden", "this key lacks the write scope", { requiredScope: ["write"] }));
+  r = await call(client, "delete_transcription", { transcriptionId: TID });
+  assert.equal(r.structuredContent.error, "forbidden");
+  assert.deepEqual(r.structuredContent.details, { requiredScope: ["write"] });
+});
+
+test("restore_transcription checks the transcription, restores it and says so", async () => {
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ lifecycle: "archived" }) });
+  fake.on("POST", `/v1/transcriptions/${TID}/restore`, { body: tx({ lifecycle: "active", name: "Episode 12 (kept)" }) });
+  const r = await call(client, "restore_transcription", { transcriptionId: TID.toUpperCase() });
+  assert.equal(r.isError, undefined, r.content[0].text);
+  assert.deepEqual(seen(), [`GET /v1/transcriptions/${TID}`, `POST /v1/transcriptions/${TID}/restore`]);
+  assert.equal(fake.requests[1].headers.authorization, `Bearer ${KEY}`);
+  assert.equal(fake.requests[1].body, undefined);
+  assert.deepEqual(r.structuredContent, { name: "Episode 12 (kept)", restored: true, transcriptionId: TID });
+});
+
+test("restore_transcription: an unknown or erased id, a read-only key, bad arguments", async () => {
+  fake.on("GET", `/v1/transcriptions/${TID}`, apiError(404, "not_found", "transcription not found"));
+  let r = await call(client, "restore_transcription", { transcriptionId: TID });
+  assert.equal(r.structuredContent.error, "not_found");
+  assert.equal(r.content[0].text, "No transcription with that id for this account.");
+  assert.deepEqual(seen(), [`GET /v1/transcriptions/${TID}`]);
+  fake.reset();
+  fake.on("GET", `/v1/transcriptions/${TID}`, apiError(403, "forbidden", "not yours"));
+  r = await call(client, "restore_transcription", { transcriptionId: TID });
+  assert.equal(r.content[0].text, "No transcription with that id for this account.");
+  fake.reset();
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ lifecycle: "archived" }) });
+  fake.on("POST", `/v1/transcriptions/${TID}/restore`, apiError(403, "forbidden", 'API key lacks the "write" scope', { requiredScope: ["write"] }));
+  r = await call(client, "restore_transcription", { transcriptionId: TID });
+  assert.equal(r.structuredContent.error, "forbidden");
+  assert.deepEqual(r.structuredContent.details, { requiredScope: ["write"] });
+  fake.reset();
+  r = await call(client, "restore_transcription", { transcriptionId: "not-a-uuid" });
+  assert.equal(r.content[0].text, "`transcriptionId` must be a UUID");
+  r = await call(client, "restore_transcription", {});
+  assert.equal(r.content[0].text, "`transcriptionId` is required");
+  r = await call(client, "restore_transcription", { transcriptionId: TID, lifecycle: "all" });
+  assert.equal(r.content[0].text, "unknown argument `lifecycle`; this tool takes transcriptionId");
+  assert.equal(fake.requests.length, 0);
+});
+
+test("set_cloned_voices patches voiceCloning with the consent beside it", async () => {
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx() });
+  fake.on("PATCH", `/v1/transcriptions/${TID}`, { body: tx({ settings: { speakerLabels: "auto", voiceCloning: true } }) });
+  let r = await call(client, "set_cloned_voices", { transcriptionId: TID, on: true, consent: true });
+  assert.equal(r.isError, undefined, r.content[0].text);
+  assert.deepEqual(seen(), [`GET /v1/transcriptions/${TID}`, `PATCH /v1/transcriptions/${TID}`]);
+  assert.deepEqual(fake.requests[1].body, { settings: { voiceCloning: true, voiceCloningConsent: true } });
+  assert.deepEqual(r.structuredContent, { clonedVoices: true, name: "Episode 12", transcriptionId: TID });
+  fake.reset();
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx() });
+  fake.on("PATCH", `/v1/transcriptions/${TID}`, { body: tx() });
+  r = await call(client, "set_cloned_voices", { transcriptionId: TID, on: false });
+  assert.deepEqual(fake.requests[1].body, { settings: { voiceCloning: false, voiceCloningConsent: false } });
+  assert.deepEqual(r.structuredContent, { clonedVoices: false, name: "Episode 12", transcriptionId: TID });
+});
+
+test("set_cloned_voices: no consent, a deleted transcription, an unknown one, bad arguments", async () => {
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx() });
+  fake.on(
+    "PATCH",
+    `/v1/transcriptions/${TID}`,
+    apiError(400, "invalid_options", "turning voiceCloning on needs voiceCloningConsent: true — confirm you have permission from everyone speaking"),
+  );
+  let r = await call(client, "set_cloned_voices", { transcriptionId: TID, on: true });
+  assert.deepEqual(fake.requests[1].body, { settings: { voiceCloning: true, voiceCloningConsent: false } });
+  assert.equal(r.structuredContent.error, "invalid_options");
+  assert.equal(r.content[0].text, "Turning cloned voices on needs consent: true, confirming everyone speaking agreed to have their voice cloned.");
+  fake.reset();
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ lifecycle: "archived" }) });
+  fake.on("PATCH", `/v1/transcriptions/${TID}`, apiError(409, "invalid_state", "this transcription is archived; restore it first"));
+  r = await call(client, "set_cloned_voices", { transcriptionId: TID, on: true, consent: true });
+  assert.equal(r.structuredContent.error, "invalid_state");
+  assert.equal(r.content[0].text, "this transcription is archived; restore it first");
+  fake.reset();
+  fake.on("GET", `/v1/transcriptions/${TID}`, apiError(404, "not_found", "transcription not found"));
+  r = await call(client, "set_cloned_voices", { transcriptionId: TID, on: false });
+  assert.equal(r.content[0].text, "No transcription with that id for this account.");
+  fake.reset();
+  r = await call(client, "set_cloned_voices", { transcriptionId: TID, on: "yes" });
+  assert.equal(r.content[0].text, "`on` must be true or false");
+  r = await call(client, "set_cloned_voices", { transcriptionId: TID, on: true, consent: "yes" });
+  assert.equal(r.content[0].text, "`consent` must be true or false");
+  r = await call(client, "set_cloned_voices", { transcriptionId: TID });
+  assert.equal(r.content[0].text, "`on` is required");
+  r = await call(client, "set_cloned_voices", { transcriptionId: TID, on: true, voice: "x" });
+  assert.equal(r.content[0].text, "unknown argument `voice`; this tool takes consent, on, transcriptionId");
+  assert.equal(fake.requests.length, 0);
 });
 
 test("list_speakers follows pages and says whether a clone is ready", async () => {
@@ -588,7 +960,142 @@ test("list_speakers follows pages and says whether a clone is ready", async () =
   ]);
 });
 
-test("list_broadcasts and get_broadcast", async () => {
+const saved = (extra = {}) => ({
+  id: SPK,
+  name: "Maria Lopez",
+  draft: false,
+  consent: "pending",
+  library: true,
+  createdAt: T0,
+  updatedAt: T0,
+  transcriptionId: TID,
+  voice: null,
+  ...extra,
+});
+
+test("save_speaker finds the speaker's number in the transcript and saves them from that appearance", async () => {
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("done") }) });
+  fake.on("GET", `/v1/transcriptions/${TID}/transcript`, { body: snapshot() });
+  fake.on("POST", "/v1/speakers/from-appearance", { status: 201, body: saved() });
+  let r = await call(client, "save_speaker", { transcriptionId: TID.toUpperCase(), speaker: 2, name: "  Maria Lopez " });
+  assert.equal(r.isError, undefined, r.content[0].text);
+  assert.deepEqual(seen(), [`GET /v1/transcriptions/${TID}`, `GET /v1/transcriptions/${TID}/transcript`, "POST /v1/speakers/from-appearance"]);
+  const post = only("POST", "/v1/speakers/from-appearance")[0];
+  assert.match(post.headers["content-type"], /^application\/json/);
+  assert.deepEqual(post.body, { transcriptionId: TID, appearance: 1, name: "Maria Lopez", consent: false });
+  assert.deepEqual(r.structuredContent, { cloned: false, consent: "pending", name: "Maria Lopez", speakerId: SPK });
+  fake.reset();
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("done") }) });
+  fake.on("GET", `/v1/transcriptions/${TID}/transcript`, { body: snapshot() });
+  fake.on("POST", "/v1/speakers/from-appearance", { status: 201, body: saved({ name: "Ana", consent: "granted", voice: { id: SPK, state: "training", progress: 0, enabled: true } }) });
+  r = await call(client, "save_speaker", { transcriptionId: TID, speaker: 1, name: "Ana", consent: true });
+  assert.deepEqual(only("POST", "/v1/speakers/from-appearance")[0].body, { transcriptionId: TID, appearance: 0, name: "Ana", consent: true });
+  assert.deepEqual(r.structuredContent, { cloned: true, consent: "granted", name: "Ana", speakerId: SPK, voiceState: "training" });
+});
+
+test("save_speaker reads numbers as get_transcription shows them, with labels off and for speakers the server has not numbered", async () => {
+  const snap = snapshot({ speakerLabels: "off", speakers: [{ speaker: 0, name: "Ana", number: 3 }] });
+  snap.segments.push({ seq: 5, start: 90, end: 91, speaker: 4, text: "Late.", language: "en", words: [] });
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: liveTx("live") });
+  fake.on("GET", `/v1/transcriptions/${TID}/transcript`, { body: snap });
+  fake.on("POST", "/v1/speakers/from-appearance", { status: 201, body: saved() });
+  await call(client, "save_speaker", { transcriptionId: TID, speaker: 3, name: "Ana" });
+  assert.equal(only("POST", "/v1/speakers/from-appearance")[0].body.appearance, 0);
+  await call(client, "save_speaker", { transcriptionId: TID, speaker: 4, name: "Bo" });
+  assert.equal(only("POST", "/v1/speakers/from-appearance")[1].body.appearance, 1);
+  await call(client, "save_speaker", { transcriptionId: TID, speaker: 5, name: "Cy" });
+  assert.equal(only("POST", "/v1/speakers/from-appearance")[2].body.appearance, 4);
+});
+
+test("save_speaker: a number nobody spoke under, too little speech, an unknown transcription, bad arguments", async () => {
+  const silent = snapshot({ speakers: [{ speaker: 0, name: "Ana", number: 1 }, { speaker: 1, name: "", number: 2 }, { speaker: 2, name: "", number: 3 }] });
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("done") }) });
+  fake.on("GET", `/v1/transcriptions/${TID}/transcript`, { body: silent });
+  let r = await call(client, "save_speaker", { transcriptionId: TID, speaker: 3, name: "Ana" });
+  assert.equal(r.structuredContent.error, "not_found");
+  assert.equal(r.content[0].text, "This transcription has no Speaker 3 who has spoken; get_transcription shows the speaker numbers.");
+  r = await call(client, "save_speaker", { transcriptionId: TID, speaker: 9, name: "Ana" });
+  assert.equal(r.content[0].text, "This transcription has no Speaker 9 who has spoken; get_transcription shows the speaker numbers.");
+  assert.equal(only("POST", "/v1/speakers/from-appearance").length, 0);
+  fake.reset();
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("done") }) });
+  fake.on("GET", `/v1/transcriptions/${TID}/transcript`, { body: snapshot() });
+  fake.on("POST", "/v1/speakers/from-appearance", apiError(400, "invalid_options", "cloning a voice needs at least 20 seconds of their speech; this speaker has 6.5"));
+  r = await call(client, "save_speaker", { transcriptionId: TID, speaker: 2, name: "Bo", consent: true });
+  assert.equal(r.structuredContent.error, "invalid_options");
+  assert.equal(r.content[0].text, "cloning a voice needs at least 20 seconds of their speech; this speaker has 6.5");
+  fake.reset();
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("done") }) });
+  fake.on("GET", `/v1/transcriptions/${TID}/transcript`, { body: snapshot() });
+  fake.on("POST", "/v1/speakers/from-appearance", apiError(404, "not_found", "speaker 1 has not said anything in this transcription"));
+  r = await call(client, "save_speaker", { transcriptionId: TID, speaker: 2, name: "Bo" });
+  assert.equal(r.content[0].text, "This transcription has no Speaker 2 who has spoken; get_transcription shows the speaker numbers.");
+  fake.reset();
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("done") }) });
+  fake.on("GET", `/v1/transcriptions/${TID}/transcript`, { body: snapshot() });
+  fake.on("POST", "/v1/speakers/from-appearance", apiError(403, "forbidden", 'API key lacks the "write" scope', { requiredScope: ["write"] }));
+  r = await call(client, "save_speaker", { transcriptionId: TID, speaker: 2, name: "Bo" });
+  assert.equal(r.structuredContent.error, "forbidden");
+  assert.deepEqual(r.structuredContent.details, { requiredScope: ["write"] });
+  fake.reset();
+  fake.on("GET", `/v1/transcriptions/${TID}`, apiError(404, "not_found", "transcription not found"));
+  r = await call(client, "save_speaker", { transcriptionId: TID, speaker: 1, name: "Ana" });
+  assert.equal(r.content[0].text, "No transcription with that id for this account.");
+  assert.deepEqual(seen(), [`GET /v1/transcriptions/${TID}`]);
+  fake.reset();
+  r = await call(client, "save_speaker", { transcriptionId: TID, speaker: 1, name: "x".repeat(61) });
+  assert.equal(r.content[0].text, "`name` must be 1 to 60 characters");
+  r = await call(client, "save_speaker", { transcriptionId: TID, speaker: 1, name: "   " });
+  assert.equal(r.content[0].text, "`name` is required");
+  r = await call(client, "save_speaker", { transcriptionId: TID, speaker: 0, name: "Ana" });
+  assert.equal(r.content[0].text, "`speaker` must be an integer from 1 to 1000");
+  r = await call(client, "save_speaker", { transcriptionId: TID, speaker: 1, name: "Ana", consent: "yes" });
+  assert.equal(r.content[0].text, "`consent` must be true or false");
+  r = await call(client, "save_speaker", { transcriptionId: TID, name: "Ana" });
+  assert.equal(r.content[0].text, "`speaker` is required");
+  assert.equal(fake.requests.length, 0);
+});
+
+test("delete_speaker deletes the saved speaker", async () => {
+  fake.on("DELETE", `/v1/speakers/${SPK}`, { status: 204 });
+  let r = await call(client, "delete_speaker", { speakerId: SPK.toUpperCase() });
+  assert.equal(r.isError, undefined, r.content[0].text);
+  assert.deepEqual(seen(), [`DELETE /v1/speakers/${SPK}`]);
+  assert.equal(fake.requests[0].headers.authorization, `Bearer ${KEY}`);
+  assert.equal(fake.requests[0].body, undefined);
+  assert.deepEqual(r.structuredContent, { deleted: true, speakerId: SPK });
+  fake.reset();
+  fake.on("DELETE", `/v1/speakers/${SPK}`, { body: { ok: true } });
+  r = await call(client, "delete_speaker", { speakerId: SPK });
+  assert.deepEqual(r.structuredContent, { deleted: true, speakerId: SPK });
+});
+
+test("delete_speaker: an unknown or someone else's id is not_found; a read-only key's refusal passes; bad arguments", async () => {
+  fake.on("DELETE", `/v1/speakers/${SPK}`, apiError(404, "not_found", "speaker not found"));
+  let r = await call(client, "delete_speaker", { speakerId: SPK });
+  assert.equal(r.structuredContent.error, "not_found");
+  assert.equal(r.content[0].text, "No saved speaker with that id for this account; list_speakers shows them.");
+  fake.reset();
+  fake.on("DELETE", `/v1/speakers/${SPK}`, apiError(403, "forbidden", "not yours"));
+  r = await call(client, "delete_speaker", { speakerId: SPK });
+  assert.equal(r.structuredContent.error, "not_found");
+  assert.equal(r.content[0].text, "No saved speaker with that id for this account; list_speakers shows them.");
+  fake.reset();
+  fake.on("DELETE", `/v1/speakers/${SPK}`, apiError(403, "forbidden", 'API key lacks the "write" scope', { requiredScope: ["write"] }));
+  r = await call(client, "delete_speaker", { speakerId: SPK });
+  assert.equal(r.structuredContent.error, "forbidden");
+  assert.equal(r.content[0].text, 'API key lacks the "write" scope');
+  fake.reset();
+  r = await call(client, "delete_speaker", { speakerId: "s1" });
+  assert.equal(r.content[0].text, "`speakerId` must be a UUID");
+  r = await call(client, "delete_speaker", {});
+  assert.equal(r.content[0].text, "`speakerId` is required");
+  r = await call(client, "delete_speaker", { id: SPK });
+  assert.equal(r.content[0].text, "unknown argument `id`; this tool takes speakerId");
+  assert.equal(fake.requests.length, 0);
+});
+
+test("list_broadcasts lists them; with broadcastId it returns that one in detail as the only item", async () => {
   const live = bcast({
     currentTranscription: { transcriptionId: TID, state: "live", startedAt: T0 },
     lastRecordedAt: T0,
@@ -599,19 +1106,44 @@ test("list_broadcasts and get_broadcast", async () => {
   fake.on("GET", `/v1/broadcasts/${BID}`, { body: live });
   const l = await call(client, "list_broadcasts", { lifecycle: "all" });
   assert.deepEqual(only("GET", "/v1/broadcasts")[0].query, { lifecycle: "all" });
+  const first = { access: "public", broadcastId: BID, lastRecordedAt: T0, link: "https://vocalstack.com/sunday", listenersNow: 3, name: "Sunday service", onAir: true, onAirSince: T0, state: "live", transcriptionId: TID };
   assert.deepEqual(l.structuredContent.broadcasts, [
-    { access: "public", broadcastId: BID, lastRecordedAt: T0, link: "https://vocalstack.com/sunday", listenersNow: 3, name: "Sunday service", onAir: true, onAirSince: T0, state: "live", transcriptionId: TID },
+    first,
     { access: "public", archived: true, broadcastId: "b2", link: "https://vocalstack.com/sunday", listenersNow: 0, name: "Sunday service", onAir: false },
   ]);
-  const g = await call(client, "get_broadcast", { broadcastId: BID });
-  assert.equal(g.structuredContent.transcriptions.length, 20);
-  assert.deepEqual(g.structuredContent.transcriptions[0], { lastRecordedAt: T0, name: "Take 0", recording: true, transcriptionId: "t0" });
-  assert.deepEqual(g.structuredContent.transcriptions[1], { name: "Take 1", recording: false, transcriptionId: "t1" });
-  assert.deepEqual(g.structuredContent.streams, [{ name: "Radio", url: "https://radio.example/live.m3u8" }]);
+  fake.requests = [];
+  const g = await call(client, "list_broadcasts", { broadcastId: BID.toUpperCase(), lifecycle: "archived" });
+  assert.deepEqual(seen(), [`GET /v1/broadcasts/${BID}`], "lifecycle is ignored with broadcastId");
+  assert.equal(g.structuredContent.broadcasts.length, 1);
+  const [one] = g.structuredContent.broadcasts;
+  const { transcriptions, streams, ...head } = one;
+  assert.deepEqual(head, first);
+  assert.equal(transcriptions.length, 20);
+  assert.deepEqual(transcriptions[0], { lastRecordedAt: T0, name: "Take 0", recording: true, transcriptionId: "t0" });
+  assert.deepEqual(transcriptions[1], { name: "Take 1", recording: false, transcriptionId: "t1" });
+  assert.deepEqual(streams, [{ name: "Radio", url: "https://radio.example/live.m3u8" }]);
   fake.reset();
+  fake.on("GET", `/v1/broadcasts/${BID}`, { body: bcast() });
+  const empty = await call(client, "list_broadcasts", { broadcastId: BID });
+  assert.deepEqual(empty.structuredContent.broadcasts[0].transcriptions, []);
+  assert.deepEqual(empty.structuredContent.broadcasts[0].streams, []);
+});
+
+test("list_broadcasts: an unknown broadcastId, a bad one, a bad lifecycle", async () => {
   fake.on("GET", `/v1/broadcasts/${BID}`, apiError(404, "not_found", "nope"));
-  const n = await call(client, "get_broadcast", { broadcastId: BID });
-  assert.equal(n.content[0].text, "No broadcast with that id for this account.");
+  let r = await call(client, "list_broadcasts", { broadcastId: BID });
+  assert.equal(r.structuredContent.error, "not_found");
+  assert.equal(r.content[0].text, "No broadcast with that id for this account.");
+  fake.reset();
+  r = await call(client, "list_broadcasts", { broadcastId: "b2" });
+  assert.equal(r.content[0].text, "`broadcastId` must be a UUID");
+  r = await call(client, "list_broadcasts", { lifecycle: "gone" });
+  assert.equal(r.content[0].text, "`lifecycle` must be one of active, archived, all");
+  assert.equal(fake.requests.length, 0);
+  fake.on("GET", "/v1/broadcasts", { body: { broadcasts: [] } });
+  r = await call(client, "list_broadcasts", { broadcastId: "  " });
+  assert.deepEqual(r.structuredContent, { broadcasts: [] }, "a blank broadcastId lists them");
+  assert.deepEqual(only("GET", "/v1/broadcasts")[0].query, { lifecycle: "active" });
 });
 
 const STREAM = "https://www.radio.example/live.m3u8";
@@ -660,6 +1192,8 @@ test("start_broadcast on an existing broadcast reuses its stream; refuses one on
   assert.deepEqual(seen(), [`GET /v1/broadcasts/${BID}`]);
   r = await call(client, "start_broadcast", { streamUrl: "ftp://x.example/a" });
   assert.equal(r.content[0].text, "`streamUrl` must be an http(s) address");
+  r = await call(client, "start_broadcast", { streamUrl: STREAM, broadcastId: "b2" });
+  assert.equal(r.content[0].text, "`broadcastId` must be a UUID");
 });
 
 test("start_broadcast retried with its key replays instead of starting twice", async () => {
@@ -721,7 +1255,7 @@ test("stop_broadcast: paused skips the pause; not on air is invalid_state", asyn
 
 test("API errors become tool errors with code, plain message, retryable, retryAfterS and topUpUrl", async () => {
   fake.on("POST", "/v1/transcriptions", apiError(402, "insufficient_credit", "Not enough credit.", { balance: 0, required: 5 }));
-  let r = await call(client, "transcribe_url", { url: "https://example.com/a.mp3" });
+  let r = await call(client, "transcribe", { url: "https://example.com/a.mp3" });
   assert.equal(r.isError, true);
   assert.deepEqual(r.structuredContent, {
     details: { balance: 0, required: 5 },
@@ -736,6 +1270,11 @@ test("API errors become tool errors with code, plain message, retryable, retryAf
     r.content[0].text,
     "Not enough credit. The account has not enough credit to start this (a new transcription needs more than its minimum charge costs); add credit before trying again.",
   );
+  fake.reset();
+  fake.on("POST", "/v1/transcriptions", apiError(422, "idempotency_key_reused", "this Idempotency-Key was used with a different request"));
+  r = await call(client, "transcribe", { url: "https://example.com/a.mp3", idempotencyKey: "k" });
+  assert.equal(r.structuredContent.error, "idempotency_key_reused");
+  assert.equal(r.structuredContent.status, 422);
   fake.reset();
   fake.on("GET", "/v1/speakers", apiError(429, "rate_limited", "Too many calls", { retryAfterS: 7 }, true));
   r = await call(client, "list_speakers", {});
@@ -775,6 +1314,27 @@ test("an unreachable API is unavailable and retryable", async () => {
   }
 });
 
+test("when the language list cannot be read, lang is left to the API to refuse", async () => {
+  const other = new FakeApi();
+  await other.start();
+  const c = await connect(other);
+  try {
+    other.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("done") }) });
+    other.on("GET", `/v1/transcriptions/${TID}/transcript`, { body: snapshot() });
+    other.on("GET", `/v1/transcriptions/${TID}/translation`, apiError(400, "invalid_options", "lang is not a translation target"));
+    const r = await call(c, "get_transcription", { transcriptionId: TID, lang: "xx" });
+    assert.equal(r.structuredContent.error, "invalid_options");
+    assert.equal(r.content[0].text, '`lang` "xx" is not a language this API translates into');
+    assert.deepEqual(
+      other.requests.map((q) => `${q.method} ${q.path}`),
+      ["GET /v1/languages", `GET /v1/transcriptions/${TID}`, `GET /v1/transcriptions/${TID}/transcript`, `GET /v1/transcriptions/${TID}/translation`],
+    );
+  } finally {
+    await c.close();
+    await other.stop();
+  }
+});
+
 test("without a key: initialize and tools/list work, every call asks for the key, nothing is requested", async () => {
   const c = await connect(fake, null);
   try {
@@ -803,4 +1363,8 @@ test("VOCALSTACK_API_URL may carry a trailing slash", async () => {
   } finally {
     await c.close();
   }
+});
+
+test("the language list is read once per server and kept", () => {
+  assert.equal(languageCalls, 1);
 });

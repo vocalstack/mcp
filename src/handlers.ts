@@ -15,12 +15,14 @@ export type Handler = (a: Args, ctx: Context) => Promise<Json>;
 
 export const MAX_FILE_BYTES = 10 * 1024 * 1024;
 export const MAX_FILE_BASE64_CHARS = Math.floor(MAX_FILE_BYTES / 3) * 4 + 8 + 1024;
-const WAIT_MAX_S = 60;
-const WAIT_DEFAULT_S = 50;
+export const WAIT_MAX_S = 60;
+export const WAITS_PER_KEY = 4;
 const WAIT_POLL_MS = 1000;
 const UPLOAD_TIMEOUT_MS = 15 * 60_000;
+const LANGUAGES_TTL_MS = 60 * 60_000;
 const NO_TRANSCRIPTION = "No transcription with that id for this account.";
 const NO_BROADCAST = "No broadcast with that id for this account.";
+const NO_SPEAKER = "No saved speaker with that id for this account; list_speakers shows them.";
 const OPEN = new Set(["pending", "live", "paused", "processing"]);
 const TERMINAL = new Set(["done", "failed", "stopped"]);
 
@@ -30,6 +32,10 @@ function put(o: Json, k: string, v: unknown): void {
 
 function path(...parts: string[]): string {
   return parts.map((p, i) => (i % 2 ? encodeURIComponent(p) : p)).join("");
+}
+
+function present(a: Args, k: string): boolean {
+  return a.raw[k] !== undefined && a.raw[k] !== null;
 }
 
 function notFound(e: unknown, message: string): never {
@@ -53,6 +59,27 @@ async function broadcast(ctx: Context, id: string): Promise<Json> {
   } catch (e) {
     notFound(e, NO_BROADCAST);
   }
+}
+
+const languages = new Map<string, { at: number; codes: Set<string> }>();
+
+async function targetLang(a: Args, ctx: Context, k: string): Promise<string | undefined> {
+  const l = a.str(k)?.toLowerCase();
+  if (l === undefined) return undefined;
+  let known = languages.get(ctx.api.origin);
+  if (!known || Date.now() - known.at > LANGUAGES_TTL_MS) {
+    try {
+      const r = await ctx.api.get("/v1/languages", undefined, ctx.signal);
+      if (Array.isArray(r?.translation) && r.translation.length) {
+        known = { at: Date.now(), codes: new Set(r.translation.map((c: unknown) => String(c).toLowerCase())) };
+        languages.set(ctx.api.origin, known);
+      }
+    } catch {
+      known = undefined;
+    }
+  }
+  if (known && !known.codes.has(l)) throw bad(`\`${k}\` ${JSON.stringify(l)} is not a language this API translates into`);
+  return l;
 }
 
 function jobStatus(job: Json, t: Json): Json {
@@ -135,16 +162,9 @@ function firstOrder(lines: { speaker: number; start: number }[]): Map<number, nu
   return new Map(order.map(([spk], i) => [spk, i + 1]));
 }
 
-function labelled(raw: Omit<Line, "speakerName">[], snapshot: Json, t: Json): Line[] {
-  const mode: string = snapshot.speakerLabels ?? t.settings?.speakerLabels ?? "auto";
-  const off = mode === "off";
-  const lines = raw.map((l) => ({ ...l, speaker: off ? -1 : l.speaker }));
-  const heard = new Set(raw.map((l) => l.speaker).filter((s) => s >= 0)).size;
-  const shown = mode === "on" || (mode === "auto" && heard > 1);
-  const names = new Map<number, string>();
+function numbering(lines: { speaker: number; start: number }[], snapshot: Json): Map<number, number> {
   const server = new Map<number, number>();
   for (const a of snapshot.speakers ?? []) {
-    if (typeof a.name === "string") names.set(a.speaker, a.name);
     if (typeof a.number === "number") server.set(a.speaker, a.number);
   }
   const order = firstOrder(lines);
@@ -155,6 +175,20 @@ function labelled(raw: Omit<Line, "speakerName">[], snapshot: Json, t: Json): Li
     const rest = [...order.entries()].filter(([s]) => !server.has(s)).sort((a, b) => a[1] - b[1]);
     for (const [s] of rest) numbers.set(s, ++top);
   }
+  return numbers;
+}
+
+function labelled(raw: Omit<Line, "speakerName">[], snapshot: Json, t: Json): Line[] {
+  const mode: string = snapshot.speakerLabels ?? t.settings?.speakerLabels ?? "auto";
+  const off = mode === "off";
+  const lines = raw.map((l) => ({ ...l, speaker: off ? -1 : l.speaker }));
+  const heard = new Set(raw.map((l) => l.speaker).filter((s) => s >= 0)).size;
+  const shown = mode === "on" || (mode === "auto" && heard > 1);
+  const names = new Map<number, string>();
+  for (const a of snapshot.speakers ?? []) {
+    if (typeof a.name === "string") names.set(a.speaker, a.name);
+  }
+  const numbers = numbering(lines, snapshot);
   return lines.map((l) => {
     let speakerName = "";
     if (shown) {
@@ -210,11 +244,14 @@ async function snapshot(ctx: Context, id: string): Promise<Json> {
   }
 }
 
-function segmentLines(snap: Json, t: Json): Line[] {
-  const raw = (snap.segments ?? [])
+function spokenSegments(snap: Json): Omit<Line, "speakerName">[] {
+  return (snap.segments ?? [])
     .filter((s: Json) => typeof s.text === "string" && s.text.trim())
     .map((s: Json) => ({ start: s.start, end: s.end, speaker: s.speaker ?? -1, text: s.text, language: s.language, words: s.words ?? [] }));
-  return labelled(raw, snap, t);
+}
+
+function segmentLines(snap: Json, t: Json): Line[] {
+  return labelled(spokenSegments(snap), snap, t);
 }
 
 function validKey(k: string): boolean {
@@ -230,6 +267,18 @@ function idempotencyKey(a: Args): string | undefined {
 function stepKey(key: string, step: string): string {
   const k = `${key}:${step}`;
   return k.length <= 255 ? k : `${createHash("sha256").update(key).digest("hex")}:${step}`;
+}
+
+function sourceOf(a: Args): boolean {
+  const url = present(a, "url");
+  const file = present(a, "fileBase64");
+  if (url && file) throw bad("give either `url` or `fileBase64`, not both");
+  if (!url && !file) throw bad(`give \`url\` (a public link) or \`fileBase64\` with \`filename\` (a file up to ${MAX_FILE_BYTES >> 20} MiB)`);
+  if (url) {
+    const stray = ["filename", "mimeType"].find((k) => present(a, k));
+    if (stray) throw bad(`\`${stray}\` goes with \`fileBase64\`, not with \`url\``);
+  }
+  return file;
 }
 
 function transcribeOptions(a: Args): Json {
@@ -249,7 +298,7 @@ function transcribeOptions(a: Args): Json {
 }
 
 function decodeFile(a: Args): Buffer {
-  const tooBig = () => bad(`fileBase64 is over ${MAX_FILE_BYTES >> 20} MiB decoded; give transcribe_url a link to the file instead`);
+  const tooBig = () => bad(`fileBase64 is over ${MAX_FILE_BYTES >> 20} MiB decoded; give \`url\` a link to the file instead`);
   const raw = a.rawStr("fileBase64");
   if (raw === undefined) throw bad("`fileBase64` must be a string");
   if (raw.length > MAX_FILE_BASE64_CHARS) throw tooBig();
@@ -264,13 +313,14 @@ function decodeFile(a: Args): Buffer {
   if (badAt >= 0) throw bad(`fileBase64 is not valid base64: Invalid symbol ${body.charCodeAt(badAt)}, offset ${badAt}.`);
   if (body.length % 4 === 1 || clean.length - body.length > 2) throw bad("fileBase64 is not valid base64: Invalid input length.");
   const bytes = Buffer.from(body, "base64");
-  if (bytes.length > MAX_FILE_BYTES) throw bad(`the file is over ${MAX_FILE_BYTES >> 20} MiB; give transcribe_url a link to it instead`);
+  if (bytes.length > MAX_FILE_BYTES) throw bad(`the file is over ${MAX_FILE_BYTES >> 20} MiB; give \`url\` a link to it instead`);
   if (bytes.length === 0) throw new ToolError("invalid_audio", "the file is empty");
   return bytes;
 }
 
-async function transcribe(a: Args, ctx: Context, file: boolean): Promise<Json> {
+async function transcribe(a: Args, ctx: Context): Promise<Json> {
   const key = idempotencyKey(a);
+  const file = sourceOf(a);
   const options = transcribeOptions(a);
   let res;
   if (!file) {
@@ -295,25 +345,26 @@ async function transcribe(a: Args, ctx: Context, file: boolean): Promise<Json> {
     const first = links?.links?.[0];
     if (first?.url) v.shareUrl = first.url;
   }
-  v.next = "Call wait_for_transcription with this transcriptionId.";
+  v.next = `Call get_transcription with this transcriptionId and waitS (up to ${WAIT_MAX_S}) to wait for the text.`;
   if (res.headers.get("idempotent-replayed") === "true") v.replayed = true;
   return v;
 }
 
-async function getTranscription(a: Args, ctx: Context): Promise<Json> {
-  const id = a.id("transcriptionId");
-  const format = a.oneOf("format", ["text", "segments", "none"], "text");
-  const words = a.bool("includeWords");
-  const offset = a.int("offset", 0, 0, 4294967295);
-  const limit = a.int("limit", 500, 1, 2000);
-  const t = await transcription(ctx, id);
-  const out: Json = { status: statusOf(t) };
-  if (format === "none") return out;
-  const snap = await snapshot(ctx, id);
-  Object.assign(out, page(segmentLines(snap, t), format, words, offset, limit));
-  const partial = t.job ? !TERMINAL.has(t.job.state) : t.state !== "finalized";
-  if (partial) out.partial = true;
-  return out;
+let waitsOpen = 0;
+
+function takeWait(): () => void {
+  if (waitsOpen >= WAITS_PER_KEY) {
+    throw new ToolError("rate_limited", `this key already has ${WAITS_PER_KEY} waits open; let one finish first`, {
+      retryAfterS: 5,
+      limit: WAITS_PER_KEY,
+    });
+  }
+  waitsOpen++;
+  let held = true;
+  return () => {
+    if (held) waitsOpen--;
+    held = false;
+  };
 }
 
 function phaseText(job: Json): string {
@@ -346,39 +397,126 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-async function wait(a: Args, ctx: Context): Promise<Json> {
-  const id = a.id("transcriptionId");
-  const timeoutMs = a.int("timeoutS", WAIT_DEFAULT_S, 1, WAIT_MAX_S) * 1000;
-  const t = await transcription(ctx, id);
-  let st = statusOf(t);
-  let job = t.job;
-  if (!job || TERMINAL.has(job.state)) return { ...st, timedOut: false };
-  const deadline = Date.now() + timeoutMs;
-  let lastSent: string | undefined;
-  let lastAt = 0;
-  for (;;) {
-    if (ctx.progress) {
-      const msg = phaseText(job);
-      const now = `${job.progress?.pct ?? 0}|${msg}`;
-      if (lastSent !== now && Date.now() - lastAt >= 1000) {
-        await ctx.progress(job.progress?.pct ?? 0, 100, msg).catch(() => {});
-        lastSent = now;
-        lastAt = Date.now();
+async function waitFor(ctx: Context, id: string, first: Json, timeoutMs: number): Promise<boolean> {
+  const release = takeWait();
+  try {
+    const deadline = Date.now() + timeoutMs;
+    let job = first;
+    let lastSent: string | undefined;
+    let lastAt = 0;
+    for (;;) {
+      if (ctx.progress) {
+        const msg = phaseText(job);
+        const now = `${job.progress?.pct ?? 0}|${msg}`;
+        if (lastSent !== now && Date.now() - lastAt >= 1000) {
+          await ctx.progress(job.progress?.pct ?? 0, 100, msg).catch(() => {});
+          lastSent = now;
+          lastAt = Date.now();
+        }
       }
+      const left = deadline - Date.now();
+      if (left <= 0 || ctx.signal.aborted) return true;
+      await sleep(Math.min(WAIT_POLL_MS, left), ctx.signal);
+      if (ctx.signal.aborted) return true;
+      try {
+        job = await ctx.api.get(path("/v1/transcriptions/", id, "/job"), undefined, ctx.signal);
+      } catch (e) {
+        if (ctx.signal.aborted) return true;
+        notFound(e, NO_TRANSCRIPTION);
+      }
+      if (TERMINAL.has(job.state)) return false;
     }
-    const left = deadline - Date.now();
-    if (left <= 0 || ctx.signal.aborted) return { ...st, timedOut: true };
-    await sleep(Math.min(WAIT_POLL_MS, left), ctx.signal);
-    if (ctx.signal.aborted) return { ...st, timedOut: true };
+  } finally {
+    release();
+  }
+}
+
+function family(l: string): string {
+  return l.split(/[_-]/)[0].toLowerCase();
+}
+
+async function translatedLines(ctx: Context, id: string, snap: Json, t: Json, lang: string, offset: number, limit: number): Promise<Line[]> {
+  const spoken: string | undefined = t.spokenLanguage ?? undefined;
+  const sentences: Json[] = (snap.sentences ?? [])
+    .filter((s: Json) => s.status !== "dropped" && typeof s.text === "string" && s.text.trim())
+    .sort((x: Json, y: Json) => x.start - y.start || x.sentenceId - y.sentenceId);
+  const lines = labelled(
+    sentences.map((s) => ({ start: s.start, end: s.end, speaker: s.speaker ?? -1, text: s.text, language: s.language })),
+    snap,
+    t,
+  );
+  const shown = sentences.slice(Math.min(offset, sentences.length), Math.min(offset + limit, sentences.length));
+  const have = new Map<number, string>();
+  const missing: number[] = [];
+  for (const s of shown) {
+    const done = s.translations?.[lang];
+    if (typeof done === "string") have.set(s.sentenceId, done);
+    else if (!(s.language && family(s.language) === family(lang))) missing.push(s.sentenceId);
+  }
+  for (let i = 0; i < missing.length; i += 40) {
+    let r: Json;
     try {
-      job = await ctx.api.get(path("/v1/transcriptions/", id, "/job"), undefined, ctx.signal);
+      r = await ctx.api.get(path("/v1/transcriptions/", id, "/translation"), { lang, sentences: missing.slice(i, i + 40).join(",") }, ctx.signal);
     } catch (e) {
-      if (ctx.signal.aborted) return { ...st, timedOut: true };
+      if (e instanceof ToolError && e.code === "invalid_options") throw bad(`\`lang\` ${JSON.stringify(lang)} is not a language this API translates into`);
       notFound(e, NO_TRANSCRIPTION);
     }
-    st = jobStatus(job, t);
-    if (TERMINAL.has(job.state)) return { ...st, timedOut: false };
+    for (const [k, v] of Object.entries(r.translations ?? {})) if (typeof v === "string") have.set(Number(k), v);
   }
+  sentences.forEach((s, i) => {
+    const done = have.get(s.sentenceId);
+    if (done !== undefined) {
+      lines[i].text = done;
+      lines[i].language = lang;
+    } else if (!(s.language && family(s.language) === family(lang))) {
+      lines[i].language = s.language ?? spoken ?? null;
+    }
+  });
+  return lines;
+}
+
+async function getTranscription(a: Args, ctx: Context): Promise<Json> {
+  const id = a.id("transcriptionId");
+  const waitS = a.int("waitS", 0, 0, WAIT_MAX_S);
+  const format = a.oneOf("format", ["text", "segments", "none"], "text");
+  const lang = await targetLang(a, ctx, "lang");
+  const words = a.bool("includeWords");
+  if (words && lang !== undefined) throw bad("`includeWords` is for the original language; leave it out with `lang`");
+  const offset = a.int("offset", 0, 0, 4294967295);
+  const limit = a.int("limit", 500, 1, 2000);
+  let t = await transcription(ctx, id);
+  let timedOut: boolean | undefined;
+  if (waitS > 0) {
+    timedOut = false;
+    if (t.job && !TERMINAL.has(t.job.state)) {
+      timedOut = await waitFor(ctx, id, t.job, waitS * 1000);
+      t = await transcription(ctx, id);
+    }
+  }
+  const out: Json = { status: statusOf(t) };
+  if (timedOut !== undefined) out.timedOut = timedOut;
+  if (format === "none") return out;
+  if (lang !== undefined) {
+    let notYet: string | undefined;
+    if (t.job && t.job.state !== "done") notYet = `the transcription is ${t.job.state}; wait until it is done (get_transcription with waitS)`;
+    else if (!t.job && OPEN.has(t.state)) {
+      notYet = "the live transcription is still running; read the text so far without lang, or stop it (stop_broadcast) and translate it then";
+    }
+    if (notYet !== undefined) {
+      if (timedOut === true) return out;
+      throw new ToolError("invalid_state", notYet);
+    }
+    const snap = await snapshot(ctx, id);
+    const spoken: string | undefined = t.spokenLanguage ?? undefined;
+    const same = spoken !== undefined && family(spoken) === family(lang);
+    const lines = same ? segmentLines(snap, t) : await translatedLines(ctx, id, snap, t, lang, offset, limit);
+    return { ...out, ...page(lines, format, false, offset, limit), lang, translated: !same };
+  }
+  const snap = await snapshot(ctx, id);
+  Object.assign(out, page(segmentLines(snap, t), format, words, offset, limit));
+  const partial = t.job ? !TERMINAL.has(t.job.state) : t.state !== "finalized";
+  if (partial) out.partial = true;
+  return out;
 }
 
 async function listTranscriptions(a: Args, ctx: Context): Promise<Json> {
@@ -430,7 +568,7 @@ async function only(a: Args, ctx: Context): Promise<string | undefined> {
   return id;
 }
 
-async function search(a: Args, ctx: Context): Promise<Json> {
+async function searchWords(a: Args, ctx: Context): Promise<Json> {
   const q = query(a);
   const transcriptionId = await only(a, ctx);
   const lang = a.str("lang");
@@ -453,7 +591,9 @@ async function search(a: Args, ctx: Context): Promise<Json> {
   return { query: r.query, queryEn: r.queryEn, hits };
 }
 
-async function searchByMeaning(a: Args, ctx: Context): Promise<Json> {
+async function searchMeaning(a: Args, ctx: Context): Promise<Json> {
+  const stray = ["lang", "limit"].find((k) => present(a, k));
+  if (stray) throw bad(`\`${stray}\` applies to mode words only; leave it out with mode meaning`);
   const q = query(a);
   const transcriptionId = await only(a, ctx);
   const r = await ctx.api.get("/v1/search/vector", { q, transcription: transcriptionId }, ctx.signal);
@@ -471,13 +611,13 @@ async function searchByMeaning(a: Args, ctx: Context): Promise<Json> {
   return out;
 }
 
-function family(l: string): string {
-  return l.split(/[_-]/)[0].toLowerCase();
+async function search(a: Args, ctx: Context): Promise<Json> {
+  return a.oneOf("mode", ["words", "meaning"], "words") === "meaning" ? searchMeaning(a, ctx) : searchWords(a, ctx);
 }
 
 async function summary(a: Args, ctx: Context): Promise<Json> {
   const id = a.id("transcriptionId");
-  const lang = a.str("lang")?.toLowerCase();
+  const lang = await targetLang(a, ctx, "lang");
   const t = await transcription(ctx, id);
   const pending = (message: string) => ({ state: "pending", message });
   const s = await ctx.api.get(path("/v1/transcriptions/", id, "/summary"), { lang }, ctx.signal);
@@ -490,7 +630,7 @@ async function summary(a: Args, ctx: Context): Promise<Json> {
     return { state: "unavailable", message: "The transcription failed, so there is nothing to summarise." };
   }
   if ((t.job && !TERMINAL.has(t.job.state)) || (!t.job && OPEN.has(t.state))) {
-    return pending("The transcription is still running; wait for it (wait_for_transcription), then ask again.");
+    return pending("The transcription is still running; wait for it (get_transcription with waitS), then ask again.");
   }
   if (s.state === "pending") return pending("The summary is being written; ask again in a few seconds.");
   let made: Json;
@@ -518,79 +658,6 @@ async function summary(a: Args, ctx: Context): Promise<Json> {
   }
 }
 
-async function translate(a: Args, ctx: Context): Promise<Json> {
-  const id = a.id("transcriptionId");
-  const lang = a.reqStr("lang").toLowerCase();
-  const format = a.oneOf("format", ["text", "segments"], "text");
-  const offset = a.int("offset", 0, 0, 4294967295);
-  const limit = a.int("limit", 500, 1, 2000);
-  const t = await transcription(ctx, id);
-  if (t.job && t.job.state !== "done") {
-    throw new ToolError("invalid_state", `the transcription is ${t.job.state}; wait until it is done (wait_for_transcription)`);
-  }
-  if (!t.job && OPEN.has(t.state)) {
-    throw new ToolError(
-      "invalid_state",
-      "the live transcription is still running; read the text so far with get_transcription, or stop it (stop_broadcast) and translate it then",
-    );
-  }
-  const snap = await snapshot(ctx, id);
-  const spoken: string | undefined = t.spokenLanguage ?? undefined;
-  const same = spoken !== undefined && family(spoken) === family(lang);
-  if (same) {
-    return { ...page(segmentLines(snap, t), format, false, offset, limit), lang, translated: false };
-  }
-  const sentences: Json[] = (snap.sentences ?? [])
-    .filter((s: Json) => s.status !== "dropped" && typeof s.text === "string" && s.text.trim())
-    .sort((x: Json, y: Json) => x.start - y.start || x.sentenceId - y.sentenceId);
-  const lines = labelled(
-    sentences.map((s) => ({ start: s.start, end: s.end, speaker: s.speaker ?? -1, text: s.text, language: s.language })),
-    snap,
-    t,
-  );
-  const shown = sentences.slice(Math.min(offset, sentences.length), Math.min(offset + limit, sentences.length));
-  const have = new Map<number, string>();
-  const missing: number[] = [];
-  for (const s of shown) {
-    const done = s.translations?.[lang];
-    if (typeof done === "string") have.set(s.sentenceId, done);
-    else if (!(s.language && family(s.language) === family(lang))) missing.push(s.sentenceId);
-  }
-  for (let i = 0; i < missing.length; i += 40) {
-    let r: Json;
-    try {
-      r = await ctx.api.get(path("/v1/transcriptions/", id, "/translation"), { lang, sentences: missing.slice(i, i + 40).join(",") }, ctx.signal);
-    } catch (e) {
-      if (e instanceof ToolError && e.code === "invalid_options") throw bad(`\`lang\` ${JSON.stringify(lang)} is not a language this API translates into`);
-      notFound(e, NO_TRANSCRIPTION);
-    }
-    for (const [k, v] of Object.entries(r.translations ?? {})) if (typeof v === "string") have.set(Number(k), v);
-  }
-  sentences.forEach((s, i) => {
-    const done = have.get(s.sentenceId);
-    if (done !== undefined) {
-      lines[i].text = done;
-      lines[i].language = lang;
-    } else if (!(s.language && family(s.language) === family(lang))) {
-      lines[i].language = s.language ?? spoken ?? null;
-    }
-  });
-  return { ...page(lines, format, false, offset, limit), lang, translated: true };
-}
-
-async function voices(a: Args, ctx: Context): Promise<Json> {
-  const lang = a.reqStr("lang");
-  const cat = await ctx.api.get("/v1/voices/available", { lang }, ctx.signal);
-  const list = (cat.voices ?? []).map((v: Json) => {
-    const o: Json = { id: v.id, name: v.name, default: v.default, cloned: v.cloned, quality: v.quality };
-    put(o, "gender", v.gender);
-    put(o, "accent", v.accent);
-    if (typeof v.previewUrl === "string") o.previewUrl = v.previewUrl.startsWith("/") ? ctx.api.origin + v.previewUrl : v.previewUrl;
-    return o;
-  });
-  return { lang: cat.lang, voices: list };
-}
-
 async function all(ctx: Context, route: string, field: string, query: Json = {}): Promise<Json[]> {
   const out: Json[] = [];
   let cursor: string | undefined;
@@ -613,6 +680,56 @@ async function speakers(_a: Args, ctx: Context): Promise<Json> {
       return o;
     }),
   };
+}
+
+function noSpeaker(number: number): ToolError {
+  return new ToolError("not_found", `This transcription has no Speaker ${number} who has spoken; get_transcription shows the speaker numbers.`);
+}
+
+async function saveSpeaker(a: Args, ctx: Context): Promise<Json> {
+  const id = a.id("transcriptionId");
+  const number = a.int("speaker", 1, 1, 1000);
+  const name = a.reqStr("name");
+  if ([...name].length > 60) throw bad("`name` must be 1 to 60 characters");
+  const consent = a.bool("consent");
+  await transcription(ctx, id);
+  const snap = await snapshot(ctx, id);
+  const spoken = spokenSegments(snap).filter((l) => l.speaker >= 0);
+  const numbers = numbering(spoken, snap);
+  const heard = new Set(spoken.map((l) => l.speaker));
+  const appearance = [...numbers.entries()]
+    .filter(([idx, n]) => n === number && heard.has(idx))
+    .map(([idx]) => idx)
+    .sort((x, y) => x - y)[0];
+  if (appearance === undefined) throw noSpeaker(number);
+  let s: Json;
+  try {
+    s = (
+      await ctx.api.request("POST", "/v1/speakers/from-appearance", {
+        json: { transcriptionId: id, appearance, name, consent },
+        signal: ctx.signal,
+      })
+    ).data;
+  } catch (e) {
+    if (e instanceof ToolError && e.code === "not_found" && e.message.includes("has not said anything")) throw noSpeaker(number);
+    throw e;
+  }
+  const out: Json = { speakerId: s.id, name: s.name, consent: s.consent, cloned: s.voice != null };
+  if (s.voice) put(out, "voiceState", s.voice.state);
+  return out;
+}
+
+async function deleteSpeaker(a: Args, ctx: Context): Promise<Json> {
+  const id = a.id("speakerId");
+  try {
+    await ctx.api.request("DELETE", path("/v1/speakers/", id), { signal: ctx.signal });
+  } catch (e) {
+    if (e instanceof ToolError && (e.code === "not_found" || (e.code === "forbidden" && !e.details.requiredScope))) {
+      throw new ToolError("not_found", NO_SPEAKER);
+    }
+    throw e;
+  }
+  return { speakerId: id, deleted: true };
 }
 
 function onAir(b: Json): Json | undefined {
@@ -640,13 +757,7 @@ function brief(b: Json): Json {
   return v;
 }
 
-async function listBroadcasts(a: Args, ctx: Context): Promise<Json> {
-  const lifecycle = a.oneOf("lifecycle", ["active", "archived", "all"], "active");
-  const list = await all(ctx, "/v1/broadcasts", "broadcasts", { lifecycle });
-  return { broadcasts: list.map(brief) };
-}
-
-async function getBroadcast(a: Args, ctx: Context): Promise<Json> {
+async function oneBroadcast(a: Args, ctx: Context): Promise<Json> {
   const b = await broadcast(ctx, a.id("broadcastId"));
   const v = brief(b);
   v.transcriptions = (b.transcriptions ?? []).slice(0, 20).map((t: Json) => {
@@ -655,7 +766,14 @@ async function getBroadcast(a: Args, ctx: Context): Promise<Json> {
     return o;
   });
   v.streams = (b.audioSources ?? []).map((s: Json) => ({ name: s.name, url: s.url }));
-  return v;
+  return { broadcasts: [v] };
+}
+
+async function listBroadcasts(a: Args, ctx: Context): Promise<Json> {
+  if (a.str("broadcastId") !== undefined) return oneBroadcast(a, ctx);
+  const lifecycle = a.oneOf("lifecycle", ["active", "archived", "all"], "active");
+  const list = await all(ctx, "/v1/broadcasts", "broadcasts", { lifecycle });
+  return { broadcasts: list.map(brief) };
 }
 
 function streamUrl(a: Args): string {
@@ -689,6 +807,13 @@ async function deleteTranscription(a: Args, ctx: Context): Promise<Json> {
   put(out, "deletedAt", t.archivedAt);
   put(out, "restorableUntil", t.purgeAfter);
   return out;
+}
+
+async function restoreTranscription(a: Args, ctx: Context): Promise<Json> {
+  const id = a.id("transcriptionId");
+  await transcription(ctx, id);
+  const t: Json = (await ctx.api.request("POST", path("/v1/transcriptions/", id, "/restore"), { signal: ctx.signal })).data;
+  return { transcriptionId: t.id, name: t.name, restored: true };
 }
 
 async function renameSpeaker(a: Args, ctx: Context): Promise<Json> {
@@ -820,22 +945,19 @@ async function stopBroadcast(a: Args, ctx: Context): Promise<Json> {
 }
 
 export const handlers: Record<string, Handler> = {
-  transcribe_url: (a, ctx) => transcribe(a, ctx, false),
-  transcribe_file: (a, ctx) => transcribe(a, ctx, true),
+  transcribe,
   get_transcription: getTranscription,
-  wait_for_transcription: wait,
   list_transcriptions: listTranscriptions,
   search_transcriptions: search,
-  search_by_meaning: searchByMeaning,
   get_summary: summary,
-  translate_transcription: translate,
   rename_speaker: renameSpeaker,
   delete_transcription: deleteTranscription,
-  list_voices: voices,
+  restore_transcription: restoreTranscription,
   set_cloned_voices: setClonedVoices,
   list_speakers: speakers,
+  save_speaker: saveSpeaker,
+  delete_speaker: deleteSpeaker,
   list_broadcasts: listBroadcasts,
-  get_broadcast: getBroadcast,
   start_broadcast: startBroadcast,
   stop_broadcast: stopBroadcast,
 };

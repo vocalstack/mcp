@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { withTools } from "./readme-tools.mjs";
 
 const DEFAULT_OUT = fileURLToPath(new URL("../src/tools.json", import.meta.url));
 const README = fileURLToPath(new URL("../README.md", import.meta.url));
@@ -74,9 +75,8 @@ if (check) {
   writeFileSync(out, text);
   console.log(`Wrote ${tools.length} tools to ${out}.`);
   if (out === DEFAULT_OUT) {
-    const lines = tools.map((t) => `- \`${t.name}\`: ${(t.description.match(/^.*?[.!?](?=\s|$)/) ?? [t.description])[0]}`);
     const readme = readFileSync(README, "utf8");
-    const next = readme.replace(/(<!-- tools -->\n)[\s\S]*?(\n<!-- \/tools -->)/, `$1${lines.join("\n")}$2`);
+    const next = withTools(readme, tools);
     if (next !== readme) writeFileSync(README, next);
   }
 }
