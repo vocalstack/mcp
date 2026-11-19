@@ -1,7 +1,7 @@
 {
   "name": "@vocalstack/mcp",
-  "version": "1.0.0",
-  "description": "VocalStack MCP server: transcribe, translate, search and summarize audio and video, and run live broadcasts, from any MCP client.",
+  "version": "1.1.0",
+  "description": "VocalStack's MCP server: transcribe, translate, search and summarize audio and video, and run live broadcasts, from any MCP client, on VocalStack's public API.",
   "license": "MIT",
   "type": "module",
   "mcpName": "com.vocalstack/mcp",
@@ -31,9 +31,12 @@
     "vocalstack"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && chmod +x dist/index.js",
+    "build": "tsc -p tsconfig.json && node -e \"require('fs').copyFileSync('src/tools.json','dist/tools.json')\" && chmod +x dist/index.js",
     "test": "npm run build && node --test test/*.test.mjs",
-    "prepublishOnly": "npm run build"
+    "sync-tools": "node scripts/sync-tools.mjs",
+    "check-tools": "npm run build && node scripts/check-handlers.mjs",
+    "prepublishOnly": "npm run build",
+    "smoke": "npm run build && node scripts/smoke.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2"

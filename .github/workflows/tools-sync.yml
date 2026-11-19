@@ -1,0 +1,32 @@
+name: Tools in sync
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run build
+      - name: Every tool has a handler, and every handler a tool
+        run: node scripts/check-handlers.mjs
+      - name: src/tools.json matches the hosted server's tools
+        run: |
+          node scripts/sync-tools.mjs --out "$RUNNER_TEMP/tools.json"
+          if ! diff -u src/tools.json "$RUNNER_TEMP/tools.json"; then
+            echo "::error::src/tools.json differs from the hosted server's tools/list. Run npm run sync-tools, add handlers for any new tool, and commit."
+            exit 1
+          fi
+      - run: npm test

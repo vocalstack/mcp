@@ -1,0 +1,566 @@
+{
+  "instructions": "VocalStack transcribes and translates audio and video, recorded or live. Start a job with transcribe_url (a link) or transcribe_file (base64, up to 10 MiB); both return a transcriptionId at once. Follow it with wait_for_transcription (blocks up to 60 s; call again while timedOut is true), then read it with get_transcription. list_transcriptions and search_transcriptions find earlier work, live transcriptions included; search_by_meaning finds the passages that answer a question about it, in any language; get_summary and translate_transcription work on finished transcriptions. Broadcasts are live events listeners follow at a public link, reading or hearing what is said in their own language: list_broadcasts and get_broadcast show them (link, on air, listeners); start_broadcast transcribes and translates a live stream on one, get_transcription reads it as it runs, and stop_broadcast ends it.",
+  "tools": [
+    {
+      "name": "transcribe_url",
+      "description": "Start transcribing audio or video at a public URL (a file link, a podcast episode, a YouTube video, a Vimeo, TikTok, X or SoundCloud post…). Returns at once with a transcriptionId; call wait_for_transcription to follow it, then get_transcription for the text. Set summary for a title and summary, shareLink for a public link to the transcript.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "endS": {
+            "description": "Transcribe up to this second; at least 0.5 s after startS.",
+            "type": "number"
+          },
+          "idempotencyKey": {
+            "description": "Send the same key when retrying the same call: the first result comes back and nothing is created twice (24 h).",
+            "maxLength": 255,
+            "type": "string"
+          },
+          "name": {
+            "description": "Display name. Defaults to the file name or the link.",
+            "maxLength": 200,
+            "type": "string"
+          },
+          "shareLink": {
+            "default": false,
+            "description": "Make a public link anyone can open to read the transcript (shareUrl in the result). Off: the transcription stays private.",
+            "type": "boolean"
+          },
+          "speakerLabels": {
+            "default": "auto",
+            "description": "Label who is speaking: auto (the default) labels lines once a second speaker is heard, on labels every line, off none. Never under a minute.",
+            "enum": [
+              "auto",
+              "on",
+              "off"
+            ]
+          },
+          "spokenLanguage": {
+            "description": "Spoken language code (e.g. en, ro, es). Omit to detect it.",
+            "type": "string"
+          },
+          "startS": {
+            "description": "Transcribe from this second.",
+            "minimum": 0,
+            "type": "number"
+          },
+          "summary": {
+            "default": false,
+            "description": "Also write a title and summary once it is done (get_summary reads it; asking get_summary later writes one anyway). Never for a transcription under a minute.",
+            "type": "boolean"
+          },
+          "url": {
+            "description": "http(s) link to an audio or video file, a YouTube video, or a public recording on Twitch, Facebook, Instagram, Vimeo, Dailymotion, TikTok, X, SoundCloud, Kick, Mixcloud, Bandcamp, LinkedIn, TED, Internet Archive, Streamable, Odysee, Niconico, VK, BitChute, Wistia, Vidyard, Kaltura, JW Player, Pinterest, Bluesky, Google Drive, Spreaker, iHeartRadio, Audioboom, CNN or Loom. Live streams are not accepted here.",
+            "format": "uri",
+            "maxLength": 2048,
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "transcribe_file",
+      "description": "Start transcribing an audio or video file you have, sent as base64 (at most 10 MiB decoded). Returns at once with a transcriptionId; call wait_for_transcription next. Set summary for a title and summary, shareLink for a public link to the transcript.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "endS": {
+            "description": "Transcribe up to this second; at least 0.5 s after startS.",
+            "type": "number"
+          },
+          "fileBase64": {
+            "description": "The whole file, base64. At most 10 MiB decoded; for a larger file use transcribe_url with a link to it.",
+            "type": "string"
+          },
+          "filename": {
+            "description": "The file's name, with its extension (meeting.m4a).",
+            "maxLength": 255,
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "description": "Send the same key when retrying the same call: the first result comes back and nothing is created twice (24 h).",
+            "maxLength": 255,
+            "type": "string"
+          },
+          "mimeType": {
+            "description": "e.g. audio/mpeg. Optional.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Display name. Defaults to the file name or the link.",
+            "maxLength": 200,
+            "type": "string"
+          },
+          "shareLink": {
+            "default": false,
+            "description": "Make a public link anyone can open to read the transcript (shareUrl in the result). Off: the transcription stays private.",
+            "type": "boolean"
+          },
+          "speakerLabels": {
+            "default": "auto",
+            "description": "Label who is speaking: auto (the default) labels lines once a second speaker is heard, on labels every line, off none. Never under a minute.",
+            "enum": [
+              "auto",
+              "on",
+              "off"
+            ]
+          },
+          "spokenLanguage": {
+            "description": "Spoken language code (e.g. en, ro, es). Omit to detect it.",
+            "type": "string"
+          },
+          "startS": {
+            "description": "Transcribe from this second.",
+            "minimum": 0,
+            "type": "number"
+          },
+          "summary": {
+            "default": false,
+            "description": "Also write a title and summary once it is done (get_summary reads it; asking get_summary later writes one anyway). Never for a transcription under a minute.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "filename",
+          "fileBase64"
+        ],
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "get_transcription",
+      "description": "Get a transcription's status and its text with timestamps and speakers: the whole text once it is done, or the text so far while a file is transcribing or a live transcription is on air (partial is true). Use format \"text\" for plain readable text, \"segments\" for timed lines. Long transcripts are paged: ask again with nextOffset.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "format": {
+            "default": "text",
+            "description": "text: readable lines; segments: timed lines; none: status only.",
+            "enum": [
+              "text",
+              "segments",
+              "none"
+            ]
+          },
+          "includeWords": {
+            "default": false,
+            "description": "Word timings in segments. Large.",
+            "type": "boolean"
+          },
+          "limit": {
+            "default": 500,
+            "maximum": 2000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "description": "First segment to return.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "transcriptionId": {
+            "description": "The transcriptionId a transcribe tool or list_transcriptions returned (the same id as `GET /v1/transcriptions/{id}`).",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transcriptionId"
+        ],
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "wait_for_transcription",
+      "description": "Wait for a file or link transcription to finish, up to 60 seconds per call. Returns its status; if timedOut is true it is still running, so call this again. When state is done, call get_transcription for the text. A live transcription runs until it is stopped, so this returns its status at once.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "timeoutS": {
+            "default": 50,
+            "maximum": 60,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "transcriptionId": {
+            "description": "The transcriptionId a transcribe tool or list_transcriptions returned (the same id as `GET /v1/transcriptions/{id}`).",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transcriptionId"
+        ],
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "list_transcriptions",
+      "description": "List this account's transcriptions, newest first, with their status: files and links (kind file) and live transcriptions, including those of broadcasts (kind live). Use search_transcriptions to find what was said.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "description": "From the previous page's nextCursor.",
+            "type": "string"
+          },
+          "lifecycle": {
+            "default": "active",
+            "description": "active: in use; archived: in the trash; all: both.",
+            "enum": [
+              "active",
+              "archived",
+              "all"
+            ]
+          },
+          "limit": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "search_transcriptions",
+      "description": "Search what was said across this account's transcriptions, in any language. Returns matching lines with the transcription they are in and the second they were said.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "lang": {
+            "description": "Also return each hit translated into this language.",
+            "type": "string"
+          },
+          "limit": {
+            "default": 20,
+            "maximum": 50,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "query": {
+            "maxLength": 200,
+            "minLength": 2,
+            "type": "string"
+          },
+          "transcriptionId": {
+            "description": "Search only this one.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "search_by_meaning",
+      "description": "Find the passages of this account's transcriptions closest in meaning to a question or topic, in any language, even when they share none of its words (vector search). Returns up to 10 passages, closest first, with the transcription, the second it starts and how close it is (0 to 1). Use them to answer questions about what was said, and cite the transcription and second.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "description": "A question or topic, in any language.",
+            "maxLength": 200,
+            "minLength": 2,
+            "type": "string"
+          },
+          "transcriptionId": {
+            "description": "Search only this one.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "get_summary",
+      "description": "Get the title and summary of a finished transcription, optionally in another language (when it was made with summaryTranslations). Asking for it writes one if the transcription was made without a summary. If state is pending the summary is being written; call again in a few seconds. not_requested means the recording is under a minute and is never summarised.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "lang": {
+            "description": "Return it translated into this language.",
+            "type": "string"
+          },
+          "transcriptionId": {
+            "description": "The transcriptionId a transcribe tool or list_transcriptions returned (the same id as `GET /v1/transcriptions/{id}`).",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transcriptionId"
+        ],
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "translate_transcription",
+      "description": "Get a finished transcription, from a file, a link or a live broadcast, translated into another language, as text or timed segments. Large transcriptions take up to a minute; translations are kept, so asking again is quick.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "format": {
+            "default": "text",
+            "enum": [
+              "text",
+              "segments"
+            ]
+          },
+          "lang": {
+            "description": "Target language code, e.g. es, de, ja.",
+            "type": "string"
+          },
+          "limit": {
+            "default": 500,
+            "maximum": 2000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "transcriptionId": {
+            "description": "The transcriptionId a transcribe tool or list_transcriptions returned (the same id as `GET /v1/transcriptions/{id}`).",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transcriptionId",
+          "lang"
+        ],
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "list_voices",
+      "description": "List the voices that can speak a language: id, name, gender and accent when known, and a quality rating. For information only: VocalStack picks the voice that reads each speaker; the only choice is whether cloned voices are used.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "lang": {
+            "description": "Language code, e.g. en, ro.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "lang"
+        ],
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "list_speakers",
+      "description": "List the speakers this account saved: the people recognised by name in its transcriptions. Each has an id, a name, and whether their voice is cloned (cloned voices can read translations, see list_voices).",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "list_broadcasts",
+      "description": "List this account's broadcasts: live events listeners follow at a public link, reading (or hearing) what is said, translated into their own language as it is spoken; each listener picks from up to 10 languages, free, with no app or sign-up. For each: its link, whether it is on air, how many are listening, and the live transcription it is showing.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "lifecycle": {
+            "default": "active",
+            "description": "active: in use; archived: in the trash; all: both.",
+            "enum": [
+              "active",
+              "archived",
+              "all"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "get_broadcast",
+      "description": "Get one broadcast: its public link, whether it is on air and since when, how many are listening, the live transcription it is showing (read it with get_transcription) and its earlier ones, and the streams it can record.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "broadcastId": {
+            "description": "The broadcastId list_broadcasts or start_broadcast returned (the same id as `GET /v1/broadcasts/{id}`).",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "broadcastId"
+        ],
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "start_broadcast",
+      "description": "Start live transcription and translation of a live stream (a YouTube live, an internet radio station, an HLS or Icecast stream) on a broadcast. Returns the public link to share: anyone who opens it reads (or, with spokenTranslations, hears) the stream in their own language as it plays, and the transcriptionId to read with get_transcription. Billed per second of live transcription while it runs; listeners are free. It runs until stop_broadcast or the stream ends.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "broadcastId": {
+            "description": "Run it on this broadcast (its listeners' link stays the same). Omit to make a new broadcast.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "description": "Send the same key when retrying the same call: the first result comes back and nothing is started twice (24 h).",
+            "maxLength": 255,
+            "type": "string"
+          },
+          "name": {
+            "description": "Name of the new broadcast, shown to listeners. Defaults to the stream's host.",
+            "maxLength": 200,
+            "type": "string"
+          },
+          "spokenLanguage": {
+            "description": "Spoken language code (e.g. en, es). Omit to detect it.",
+            "type": "string"
+          },
+          "spokenTranslations": {
+            "default": false,
+            "description": "Also read each translation aloud, so listeners can hear it in their language as well as read it.",
+            "type": "boolean"
+          },
+          "streamUrl": {
+            "description": "http(s) address of a live stream to transcribe and translate as it plays: a YouTube live, an internet radio station, an HLS (.m3u8) or Icecast stream.",
+            "format": "uri",
+            "maxLength": 2048,
+            "type": "string"
+          }
+        },
+        "required": [
+          "streamUrl"
+        ],
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "stop_broadcast",
+      "description": "Stop the live transcription a broadcast is running. The transcript is kept (get_transcription, translate_transcription, get_summary) and the link stays, for the next time it goes on air.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "broadcastId": {
+            "description": "The broadcastId list_broadcasts or start_broadcast returned (the same id as `GET /v1/broadcasts/{id}`).",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "broadcastId"
+        ],
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    }
+  ]
+}
