@@ -1,12 +1,28 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { handlers } from "../dist/handlers.js";
 
-const tools = JSON.parse(readFileSync(new URL("../src/tools.json", import.meta.url), "utf8")).tools.map((t) => t.name);
-const names = Object.keys(handlers);
-const noHandler = tools.filter((t) => !names.includes(t));
-const noTool = names.filter((n) => !tools.includes(n));
-if (noHandler.length) console.error(`Tools with no handler: ${noHandler.join(", ")}`);
-if (noTool.length) console.error(`Handlers with no tool: ${noTool.join(", ")}`);
-if (noHandler.length || noTool.length) process.exit(1);
-console.log(`Every one of the ${tools.length} tools has a handler, and every handler a tool.`);
+export const PENDING = ["rename_speaker", "delete_transcription", "set_cloned_voices"];
+
+export function check(tools, names = Object.keys(handlers), pending = PENDING) {
+  const problems = [];
+  const noHandler = tools.filter((t) => !names.includes(t));
+  const noTool = names.filter((n) => !tools.includes(n) && !pending.includes(n));
+  const landed = pending.filter((n) => tools.includes(n));
+  const stray = pending.filter((n) => !names.includes(n));
+  if (noHandler.length) problems.push(`Tools with no handler: ${noHandler.join(", ")}`);
+  if (noTool.length) problems.push(`Handlers with no tool: ${noTool.join(", ")}`);
+  if (landed.length) problems.push(`Now in tools.json, remove from PENDING in scripts/check-handlers.mjs: ${landed.join(", ")}`);
+  if (stray.length) problems.push(`In PENDING with no handler: ${stray.join(", ")}`);
+  return problems;
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const tools = JSON.parse(readFileSync(new URL("../src/tools.json", import.meta.url), "utf8")).tools.map((t) => t.name);
+  const problems = check(tools);
+  for (const p of problems) console.error(p);
+  if (problems.length) process.exit(1);
+  const waiting = PENDING.length ? ` (${PENDING.length} more handled ahead of the hosted release: ${PENDING.join(", ")})` : "";
+  console.log(`Every one of the ${tools.length} tools has a handler, and every handler a tool${waiting}.`);
+}

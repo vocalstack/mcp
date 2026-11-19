@@ -258,7 +258,7 @@ test("get_transcription pages readable text with speakers and marks a running on
   assert.equal(r.structuredContent.nextOffset, 2);
   r = await call(client, "get_transcription", { transcriptionId: TID, format: "segments", includeWords: true, limit: 1 });
   assert.deepEqual(r.structuredContent.segments, [
-    { end: 3, language: "en", speaker: 0, speakerName: "Ana", start: 0.5, text: " Hello there. ", words: [{ end: 1, start: 0.5, text: "Hello" }] },
+    { end: 3, language: "en", speaker: 0, speakerName: "Ana", speakerNumber: 1, start: 0.5, text: " Hello there. ", words: [{ end: 1, start: 0.5, text: "Hello" }] },
   ]);
   r = await call(client, "get_transcription", { transcriptionId: TID, format: "none" });
   assert.deepEqual(Object.keys(r.structuredContent), ["status"]);
@@ -291,6 +291,47 @@ test("get_transcription: one speaker under auto labels still reads as Speaker 1"
   const r = await call(client, "get_transcription", { transcriptionId: TID });
   assert.equal(r.structuredContent.text.split("\n")[0], "[00:00] Speaker 1: Hello there.");
   assert.equal(r.structuredContent.partial, undefined);
+});
+
+test("segments carry speakerNumber: the server's numbers first, then unnumbered speakers after the highest", async () => {
+  const snap = snapshot({
+    speakers: [
+      { speaker: 0, name: "Ana", number: 3 },
+      { speaker: 1, name: "", number: 1 },
+    ],
+  });
+  snap.segments.push({ seq: 5, start: 90, end: 91, speaker: 4, text: "Late.", language: "en", words: [] });
+  snap.sentences.push({ sentenceId: 14, seqs: [5], start: 90, end: 91, speaker: 4, text: "Late.", status: "final", language: "en", translations: { es: "Tarde." } });
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("done") }) });
+  fake.on("GET", `/v1/transcriptions/${TID}/transcript`, { body: snap });
+  fake.on("GET", `/v1/transcriptions/${TID}/translation`, { body: { lang: "es", translations: { 11: "Hola Ana.", 13: "Adiós." } } });
+  let r = await call(client, "get_transcription", { transcriptionId: TID, format: "segments" });
+  assert.deepEqual(
+    r.structuredContent.segments.map((s) => [s.speaker, s.speakerNumber, s.speakerName]),
+    [
+      [0, 3, "Ana"],
+      [1, 1, "Speaker 1"],
+      [0, 3, "Ana"],
+      [4, 4, "Speaker 4"],
+    ],
+  );
+  r = await call(client, "get_transcription", { transcriptionId: TID });
+  assert.equal(r.structuredContent.text.split("\n")[1], "[00:03] Speaker 1: Hi Ana.");
+  r = await call(client, "translate_transcription", { transcriptionId: TID, lang: "es", format: "segments" });
+  assert.deepEqual(
+    r.structuredContent.segments.map((s) => [s.speakerNumber, s.speakerName, s.text]),
+    [
+      [3, "Ana", "Hola."],
+      [1, "Speaker 1", "Hola Ana."],
+      [3, "Ana", "Adiós."],
+      [4, "Speaker 4", "Tarde."],
+    ],
+  );
+  fake.reset();
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("done") }) });
+  fake.on("GET", `/v1/transcriptions/${TID}/transcript`, { body: snapshot({ speakerLabels: "off" }) });
+  r = await call(client, "get_transcription", { transcriptionId: TID, format: "segments" });
+  assert.ok(r.structuredContent.segments.every((s) => s.speakerNumber === undefined && s.speaker === undefined));
 });
 
 test("an unknown id is not_found in the hosted wording", async () => {
@@ -474,7 +515,7 @@ test("translate_transcription translates only the sentences on the page that lac
   });
   const s = await call(client, "translate_transcription", { transcriptionId: TID, lang: "es", format: "segments", offset: 2 });
   assert.deepEqual(only("GET", `/v1/transcriptions/${TID}/translation`)[1].query, { lang: "es", sentences: "13" });
-  assert.deepEqual(s.structuredContent.segments, [{ end: 80, language: "es", speaker: 0, speakerName: "Ana", start: 75.4, text: "Adiós." }]);
+  assert.deepEqual(s.structuredContent.segments, [{ end: 80, language: "es", speaker: 0, speakerName: "Ana", speakerNumber: 1, start: 75.4, text: "Adiós." }]);
 });
 
 test("translate_transcription: the spoken language comes back untranslated", async () => {

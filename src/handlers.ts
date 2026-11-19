@@ -118,6 +118,7 @@ interface Line {
   end: number;
   speaker: number;
   speakerName: string;
+  speakerNumber?: number;
   text: string;
   language?: string | null;
   words?: Json[];
@@ -163,7 +164,8 @@ function labelled(raw: Omit<Line, "speakerName">[], snapshot: Json, t: Json): Li
         speakerName = given && !genericName(given) ? given : `Speaker ${numbers.get(l.speaker) ?? 0}`;
       }
     }
-    return { ...l, speakerName };
+    const speakerNumber = l.speaker >= 0 ? numbers.get(l.speaker) : undefined;
+    return { ...l, speakerName, speakerNumber };
   });
 }
 
@@ -172,16 +174,18 @@ function page(lines: Line[], format: string, words: boolean, offset: number, lim
   const slice = lines.slice(Math.min(offset, total), Math.min(offset + limit, total));
   const out: Json = { segmentCount: total };
   if (offset + slice.length < total) out.nextOffset = offset + slice.length;
-  const numbers = firstOrder(lines);
   const speaker = (l: Line): string | undefined => {
     if (l.speakerName.trim()) return l.speakerName;
-    if (l.speaker >= 0) return `Speaker ${numbers.get(l.speaker) ?? l.speaker + 1}`;
+    if (l.speaker >= 0) return `Speaker ${l.speakerNumber ?? l.speaker + 1}`;
     return undefined;
   };
   if (format === "segments") {
     out.segments = slice.map((l) => {
       const s: Json = { start: l.start, end: l.end, text: l.text };
-      if (l.speaker >= 0) s.speaker = l.speaker;
+      if (l.speaker >= 0) {
+        s.speaker = l.speaker;
+        put(s, "speakerNumber", l.speakerNumber);
+      }
       put(s, "speakerName", speaker(l));
       put(s, "language", l.language);
       if (words) s.words = (l.words ?? []).map((w) => ({ text: w.text, start: w.start, end: w.end }));
@@ -666,6 +670,74 @@ function streamUrl(a: Args): string {
   return u;
 }
 
+async function deleteTranscription(a: Args, ctx: Context): Promise<Json> {
+  const id = a.id("transcriptionId");
+  await transcription(ctx, id);
+  let t: Json;
+  try {
+    t = (await ctx.api.request("POST", path("/v1/transcriptions/", id, "/archive"), { signal: ctx.signal })).data;
+  } catch (e) {
+    if (e instanceof ToolError && e.code === "invalid_state" && e.message.includes("stop the recording first")) {
+      throw new ToolError(
+        "invalid_state",
+        "This transcription is still recording live; stop it first (stop_broadcast for a broadcast), then delete it.",
+      );
+    }
+    throw e;
+  }
+  const out: Json = { transcriptionId: t.id, name: t.name, deleted: true };
+  put(out, "deletedAt", t.archivedAt);
+  put(out, "restorableUntil", t.purgeAfter);
+  return out;
+}
+
+async function renameSpeaker(a: Args, ctx: Context): Promise<Json> {
+  const id = a.id("transcriptionId");
+  const number = a.int("speaker", 1, 1, 1000);
+  const given = a.raw.name;
+  if (typeof given !== "string") throw bad('`name` must be a string ("" clears the name)');
+  const name = [...given.trim()].slice(0, 80).join("");
+  await transcription(ctx, id);
+  try {
+    await ctx.api.request("PUT", path("/v1/transcriptions/", id, "/appearances/", String(number)), {
+      json: { name: name || null },
+      signal: ctx.signal,
+    });
+  } catch (e) {
+    if (e instanceof ToolError && e.code === "not_found") {
+      throw new ToolError("not_found", `This transcription has no Speaker ${number}; get_transcription shows the speaker numbers.`);
+    }
+    throw e;
+  }
+  return { transcriptionId: id, speaker: number, name: name || null };
+}
+
+const VOICE_CLONING_NEEDS_CONSENT =
+  "turning voiceCloning on needs voiceCloningConsent: true — confirm you have permission from everyone speaking";
+
+async function setClonedVoices(a: Args, ctx: Context): Promise<Json> {
+  const id = a.id("transcriptionId");
+  const on = a.raw.on;
+  if (typeof on !== "boolean") throw bad("`on` must be true or false");
+  const consent = a.bool("consent");
+  await transcription(ctx, id);
+  let t: Json;
+  try {
+    t = (
+      await ctx.api.request("PATCH", path("/v1/transcriptions/", id), {
+        json: { settings: { voiceCloning: on, voiceCloningConsent: consent } },
+        signal: ctx.signal,
+      })
+    ).data;
+  } catch (e) {
+    if (e instanceof ToolError && e.message === VOICE_CLONING_NEEDS_CONSENT) {
+      throw bad("Turning cloned voices on needs consent: true, confirming everyone speaking agreed to have their voice cloned.");
+    }
+    throw e;
+  }
+  return { transcriptionId: t.id, name: t.name, clonedVoices: t.settings?.voiceCloning === true };
+}
+
 const ON_AIR = "This broadcast is already on air; stop it first (stop_broadcast) or use another broadcast.";
 
 async function startBroadcast(a: Args, ctx: Context): Promise<Json> {
@@ -757,7 +829,10 @@ export const handlers: Record<string, Handler> = {
   search_by_meaning: searchByMeaning,
   get_summary: summary,
   translate_transcription: translate,
+  rename_speaker: renameSpeaker,
+  delete_transcription: deleteTranscription,
   list_voices: voices,
+  set_cloned_voices: setClonedVoices,
   list_speakers: speakers,
   list_broadcasts: listBroadcasts,
   get_broadcast: getBroadcast,
