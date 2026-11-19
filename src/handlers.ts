@@ -478,7 +478,7 @@ async function translatedLines(ctx: Context, id: string, snap: Json, t: Json, la
 async function getTranscription(a: Args, ctx: Context): Promise<Json> {
   const id = a.id("transcriptionId");
   const waitS = a.int("waitS", 0, 0, WAIT_MAX_S);
-  const format = a.oneOf("format", ["text", "segments", "none"], "text");
+  const format = a.oneOf("format", ["text", "segments", "summary", "none"], "text");
   const lang = await targetLang(a, ctx, "lang");
   const words = a.bool("includeWords");
   if (words && lang !== undefined) throw bad("`includeWords` is for the original language; leave it out with `lang`");
@@ -502,6 +502,11 @@ async function getTranscription(a: Args, ctx: Context): Promise<Json> {
   const out: Json = { status };
   if (timedOut !== undefined) out.timedOut = timedOut;
   if (format === "none") return out;
+  if (format === "summary") {
+    if (words) throw bad("`includeWords` goes with format segments");
+    out.summary = await summaryOf(ctx, id, t, lang);
+    return out;
+  }
   if (lang !== undefined) {
     let notYet: string | undefined;
     if (t.job && t.job.state !== "done") notYet = `the transcription is ${t.job.state}; wait until it is done (get_transcription with waitS)`;
@@ -621,11 +626,7 @@ async function search(a: Args, ctx: Context): Promise<Json> {
   return a.oneOf("mode", ["words", "meaning"], "words") === "meaning" ? searchMeaning(a, ctx) : searchWords(a, ctx);
 }
 
-async function summary(a: Args, ctx: Context): Promise<Json> {
-  const id = a.id("transcriptionId");
-  const lang = await targetLang(a, ctx, "lang");
-  const t = await transcription(ctx, id);
-  const pending = (message: string) => ({ state: "pending", message });
+async function summaryOf(ctx: Context, id: string, t: Json, lang?: string): Promise<Json> {
   const s = await ctx.api.get(path("/v1/transcriptions/", id, "/summary"), { lang }, ctx.signal);
   if (s.state === "ready") {
     const v: Json = { state: "ready", title: s.title ?? t.name, summary: s.summary };
@@ -636,22 +637,25 @@ async function summary(a: Args, ctx: Context): Promise<Json> {
     return { state: "unavailable", message: "The transcription failed, so there is nothing to summarise." };
   }
   if ((t.job && !TERMINAL.has(t.job.state)) || (!t.job && OPEN.has(t.state))) {
-    return pending("The transcription is still running; wait for it (get_transcription with waitS), then ask again.");
+    return { state: "pending", message: "The transcription is still running; wait for it (get_transcription with waitS), then ask again." };
   }
-  if (s.state === "pending") return pending("The summary is being written; ask again in a few seconds.");
-  let made: Json;
-  try {
-    made = (await ctx.api.request("POST", path("/v1/transcriptions/", id, "/summarize"), { signal: ctx.signal })).data;
-  } catch (e) {
-    if (e instanceof ToolError && e.code === "forbidden") {
-      throw new ToolError(
-        "forbidden",
-        "This transcription has no summary yet, and starting one needs the write scope; this credential can only read an existing summary.",
-        { requiredScope: ["write"] },
-      );
-    }
-    throw e;
+  if (s.state === "pending") return { state: "pending", message: "The summary is being written; ask again in a few seconds." };
+  if (s.state === "unavailable") return { state: "unavailable", message: "Summaries are not available on this server." };
+  const length = t.durationS ?? t.job?.source?.durationS;
+  if (typeof length === "number" && length < 60) {
+    return { state: "not_requested", message: "Transcriptions shorter than a minute are not summarised." };
   }
+  return { state: "none", message: "No summary was asked for; update_transcription with summary true writes one." };
+}
+
+async function writeSummary(ctx: Context, id: string, t: Json): Promise<Json> {
+  const current = await summaryOf(ctx, id, t);
+  if (current.state === "ready" || current.state === "unavailable" || current.state === "not_requested") return current;
+  if ((t.job && !TERMINAL.has(t.job.state)) || (!t.job && OPEN.has(t.state))) {
+    throw new ToolError("invalid_state", "The transcription is still running; wait for it (get_transcription with waitS), then ask for the summary.");
+  }
+  if (current.state === "pending") return current;
+  const made = (await ctx.api.request("POST", path("/v1/transcriptions/", id, "/summarize"), { signal: ctx.signal })).data;
   switch (made.state) {
     case "ready":
       return { state: "ready", title: made.title ?? t.name, summary: made.summary };
@@ -660,7 +664,7 @@ async function summary(a: Args, ctx: Context): Promise<Json> {
     case "not_requested":
       return { state: "not_requested", message: "Transcriptions shorter than a minute are not summarised." };
     default:
-      return pending("The summary is being written; ask again in a few seconds.");
+      return { state: "pending", message: "The summary is being written; ask again in a few seconds." };
   }
 }
 
@@ -815,7 +819,14 @@ async function deleteTranscription(a: Args, ctx: Context): Promise<Json> {
   return out;
 }
 
-function renameTarget(a: Args): boolean {
+function optBool(a: Args, k: string): boolean | undefined {
+  const v = a.raw[k];
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== "boolean") throw bad(`\`${k}\` must be true or false`);
+  return v;
+}
+
+function speakerTarget(a: Args): boolean {
   const sid = present(a, "speakerId");
   const tid = present(a, "transcriptionId");
   const spk = present(a, "speaker");
@@ -834,27 +845,92 @@ function noSavedSpeaker(e: unknown): never {
   throw e;
 }
 
-async function renameSavedSpeaker(a: Args, ctx: Context): Promise<Json> {
-  const id = a.id("speakerId");
-  const given = a.raw.name;
-  if (typeof given !== "string") throw bad("`name` must be a string");
-  const name = given.trim();
-  const n = [...name].length;
-  if (n === 0 || n > 60) throw bad("a saved speaker's `name` must be 1 to 60 characters");
-  let s: Json;
+async function savedSpeaker(ctx: Context, id: string): Promise<Json> {
   try {
-    s = (await ctx.api.request("PATCH", path("/v1/speakers/", id), { json: { name }, signal: ctx.signal })).data;
+    return await ctx.api.get(path("/v1/speakers/", id), undefined, ctx.signal);
   } catch (e) {
     noSavedSpeaker(e);
   }
-  return { speakerId: s.id, name: s.name };
 }
 
-async function renameSpeaker(a: Args, ctx: Context): Promise<Json> {
-  if (renameTarget(a)) return renameSavedSpeaker(a, ctx);
+async function patchSpeaker(ctx: Context, id: string, body: Json): Promise<void> {
+  try {
+    await ctx.api.request("PATCH", path("/v1/speakers/", id), { json: body, signal: ctx.signal });
+  } catch (e) {
+    noSavedSpeaker(e);
+  }
+}
+
+async function updateSavedSpeaker(a: Args, ctx: Context): Promise<Json> {
+  const id = a.id("speakerId");
+  let name: string | undefined;
+  const given = a.raw.name;
+  if (given !== undefined && given !== null) {
+    if (typeof given !== "string") throw bad("`name` must be a string");
+    name = given.trim();
+    const n = [...name].length;
+    if (n === 0 || n > 60) throw bad("a saved speaker's `name` must be 1 to 60 characters");
+  }
+  const cloned = optBool(a, "clonedVoice");
+  const consent = a.bool("consent");
+  if (name === undefined && cloned === undefined) throw bad("give `name`, `clonedVoice` or both to change a saved speaker");
+  if (cloned === true && !consent) {
+    throw bad("Turning a saved speaker's cloned voice on needs consent: true, confirming that person agreed to have their voice cloned.");
+  }
+  const report = (s: Json): Json => {
+    const out: Json = {
+      speakerId: s.id,
+      name: s.name,
+      consent: s.consent,
+      clonedVoice: s.voice?.enabled === true && s.consent === "granted",
+    };
+    if (s.voice) put(out, "voiceState", s.voice.state);
+    return out;
+  };
+  if (cloned === undefined) {
+    try {
+      return report((await ctx.api.request("PATCH", path("/v1/speakers/", id), { json: { name }, signal: ctx.signal })).data);
+    } catch (e) {
+      noSavedSpeaker(e);
+    }
+  }
+  const cur = await savedSpeaker(ctx, id);
+  if (cloned === true && cur.consent === "refused") {
+    throw new ToolError(
+      "invalid_state",
+      "This speaker refused to be cloned and their audio was deleted; save them again from a transcription (save_speaker with consent) to clone them.",
+    );
+  }
+  if (name !== undefined) await patchSpeaker(ctx, id, { name });
+  if (cloned === true) {
+    let s: Json;
+    try {
+      s = (await ctx.api.request("POST", path("/v1/speakers/", id, "/consent"), { json: { consent: "granted" }, signal: ctx.signal })).data;
+    } catch (e) {
+      if (e instanceof ToolError && e.code === "invalid_state" && e.message.includes("no sample stored")) {
+        throw new ToolError(
+          "invalid_state",
+          "This saved speaker has no stored sample to clone their voice from; save them again from a transcription (save_speaker with consent).",
+        );
+      }
+      noSavedSpeaker(e);
+    }
+    if (s?.voice && s.voice.enabled === false) await patchSpeaker(ctx, id, { enabled: true });
+  } else if (cloned === false && cur.voice?.enabled === true) {
+    await patchSpeaker(ctx, id, { enabled: false });
+  }
+  return report(await savedSpeaker(ctx, id));
+}
+
+async function updateSpeaker(a: Args, ctx: Context): Promise<Json> {
+  if (speakerTarget(a)) return updateSavedSpeaker(a, ctx);
+  if (present(a, "clonedVoice")) {
+    throw bad("`clonedVoice` is for a saved speaker (speakerId); for everyone in one transcription use update_transcription with clonedVoices");
+  }
   const id = a.id("transcriptionId");
   const number = a.int("speaker", 1, 1, 1000);
   const given = a.raw.name;
+  if (given === undefined || given === null) throw bad('`name` is required with `transcriptionId` and `speaker` ("" clears the name)');
   if (typeof given !== "string") throw bad('`name` must be a string ("" clears the name)');
   const name = [...given.trim()].slice(0, 80).join("");
   await transcription(ctx, id);
@@ -874,101 +950,105 @@ async function renameSpeaker(a: Args, ctx: Context): Promise<Json> {
 
 const VOICE_CLONING_NEEDS_CONSENT =
   "turning voiceCloning on needs voiceCloningConsent: true — confirm you have permission from everyone speaking";
+const NEEDS_CONSENT = "Turning cloned voices on needs consent: true, confirming everyone speaking agreed to have their voice cloned.";
 
-function clonedVoicesTarget(a: Args): boolean {
-  const sid = present(a, "speakerId");
-  const tid = present(a, "transcriptionId");
-  if (sid && !tid) return true;
-  if (tid && !sid) return false;
-  if (sid) throw bad("give either `transcriptionId` (one transcription) or `speakerId` (a saved speaker), not both");
-  throw bad("give `transcriptionId` (one transcription) or `speakerId` (a saved speaker)");
+function consentError(e: unknown): never {
+  if (e instanceof ToolError && e.message === VOICE_CLONING_NEEDS_CONSENT) throw bad(NEEDS_CONSENT);
+  throw e;
 }
 
-function onArg(a: Args): boolean {
-  const on = a.raw.on;
-  if (typeof on !== "boolean") throw bad("`on` must be true or false");
-  return on;
-}
-
-async function savedSpeaker(ctx: Context, id: string): Promise<Json> {
-  try {
-    return await ctx.api.get(path("/v1/speakers/", id), undefined, ctx.signal);
-  } catch (e) {
-    noSavedSpeaker(e);
+async function updateTranscription(a: Args, ctx: Context): Promise<Json> {
+  const id = a.id("transcriptionId");
+  let name = a.str("name");
+  if (name !== undefined) {
+    name = name.trim();
+    const n = [...name].length;
+    if (n === 0 || n > 200) throw bad("`name` must be 1 to 200 characters");
   }
-}
-
-async function patchSpeaker(ctx: Context, id: string, body: Json): Promise<void> {
-  try {
-    await ctx.api.request("PATCH", path("/v1/speakers/", id), { json: body, signal: ctx.signal });
-  } catch (e) {
-    noSavedSpeaker(e);
-  }
-}
-
-async function setSpeakerClonedVoice(a: Args, ctx: Context): Promise<Json> {
-  const id = a.id("speakerId");
-  const on = onArg(a);
+  const share = optBool(a, "shareLink");
+  const summary = optBool(a, "summary");
+  const cloned = optBool(a, "clonedVoices");
   const consent = a.bool("consent");
-  if (on && !consent) {
-    throw bad("Turning a saved speaker's cloned voice on needs consent: true, confirming that person agreed to have their voice cloned.");
+  if (summary === false) throw bad("`summary` takes only true (write one now); a summary is never deleted");
+  if (name === undefined && share === undefined && summary === undefined && cloned === undefined) {
+    throw bad("give at least one of `name`, `shareLink`, `summary` or `clonedVoices` to change");
   }
-  const cur = await savedSpeaker(ctx, id);
-  if (on) {
-    if (cur.consent === "refused") {
-      throw new ToolError(
-        "invalid_state",
-        "This speaker refused to be cloned and their audio was deleted; save them again from a transcription (save_speaker with consent) to clone them.",
-      );
-    }
-    let s: Json;
+  if (cloned === true && !consent) throw bad(NEEDS_CONSENT);
+  let t = await transcription(ctx, id);
+  if (t.lifecycle && t.lifecycle !== "active") {
+    throw new ToolError("invalid_state", "This transcription is in the trash; restore it in the VocalStack Dashboard first.");
+  }
+  const written = summary === true ? await writeSummary(ctx, id, t) : undefined;
+  if (name !== undefined || cloned !== undefined) {
+    const body: Json = {};
+    if (name !== undefined) body.name = name;
+    if (cloned !== undefined) body.settings = { voiceCloning: cloned, voiceCloningConsent: consent };
     try {
-      s = (await ctx.api.request("POST", path("/v1/speakers/", id, "/consent"), { json: { consent: "granted" }, signal: ctx.signal })).data;
+      t = (await ctx.api.request("PATCH", path("/v1/transcriptions/", id), { json: body, signal: ctx.signal })).data;
     } catch (e) {
-      if (e instanceof ToolError && e.code === "invalid_state" && e.message.includes("no sample stored")) {
-        throw new ToolError(
-          "invalid_state",
-          "This saved speaker has no stored sample to clone their voice from; save them again from a transcription (save_speaker with consent).",
-        );
-      }
-      noSavedSpeaker(e);
+      consentError(e);
     }
-    if (s?.voice && s.voice.enabled === false) await patchSpeaker(ctx, id, { enabled: true });
-  } else if (cur.voice?.enabled === true) {
-    await patchSpeaker(ctx, id, { enabled: false });
   }
-  const s = await savedSpeaker(ctx, id);
-  const out: Json = {
-    speakerId: s.id,
-    name: s.name,
-    consent: s.consent,
-    clonedVoice: s.voice?.enabled === true && s.consent === "granted",
-  };
-  if (s.voice) put(out, "voiceState", s.voice.state);
+  let links: Json[] = (await ctx.api.get(path("/v1/transcriptions/", id, "/share-links"), undefined, ctx.signal))?.links ?? [];
+  if (share === true && links.length === 0) {
+    const l = (await ctx.api.request("POST", path("/v1/transcriptions/", id, "/share-links"), { json: { label: "Shared link" }, signal: ctx.signal })).data;
+    links = [l];
+  } else if (share === false) {
+    for (const l of links) await ctx.api.request("DELETE", path("/v1/share-links/", l.id), { signal: ctx.signal });
+    links = [];
+  }
+  const out: Json = { transcriptionId: t.id, name: t.name, shareUrl: links[0]?.url ?? null, clonedVoices: t.settings?.voiceCloning === true };
+  if (written) out.summary = written;
   return out;
 }
 
-async function setClonedVoices(a: Args, ctx: Context): Promise<Json> {
-  if (clonedVoicesTarget(a)) return setSpeakerClonedVoice(a, ctx);
-  const id = a.id("transcriptionId");
-  const on = onArg(a);
+async function updateBroadcast(a: Args, ctx: Context): Promise<Json> {
+  const id = a.id("broadcastId");
+  const name = a.str("name");
+  const access = a.raw.access === undefined || a.raw.access === null ? undefined : a.oneOf("access", ["public", "private"], "public");
+  const password = a.str("password");
+  const spokenRaw = a.str("spokenLanguage");
+  const speak = optBool(a, "spokenTranslations");
+  const cloned = optBool(a, "clonedVoices");
   const consent = a.bool("consent");
-  await transcription(ctx, id);
-  let t: Json;
-  try {
-    t = (
-      await ctx.api.request("PATCH", path("/v1/transcriptions/", id), {
-        json: { settings: { voiceCloning: on, voiceCloningConsent: consent } },
-        signal: ctx.signal,
-      })
-    ).data;
-  } catch (e) {
-    if (e instanceof ToolError && e.message === VOICE_CLONING_NEEDS_CONSENT) {
-      throw bad("Turning cloned voices on needs consent: true, confirming everyone speaking agreed to have their voice cloned.");
-    }
-    throw e;
+  if ([name, access, password, spokenRaw, speak, cloned].every((v) => v === undefined)) {
+    throw bad("give at least one of `name`, `access`, `password`, `spokenLanguage`, `spokenTranslations` or `clonedVoices` to change");
   }
-  return { transcriptionId: t.id, name: t.name, clonedVoices: t.settings?.voiceCloning === true };
+  if (cloned === true && !consent) throw bad(NEEDS_CONSENT);
+  await broadcast(ctx, id);
+  const body: Json = {};
+  if (name !== undefined) body.name = name;
+  if (access !== undefined) body.access = access;
+  if (password !== undefined && access !== "public") body.password = password;
+  const settings: Json = {};
+  if (spokenRaw !== undefined) {
+    const l = spokenRaw.trim().toLowerCase();
+    settings.spokenLanguage = l === "" || l === "auto" ? null : l;
+  }
+  if (speak !== undefined) settings.translationTts = speak;
+  if (cloned !== undefined) {
+    settings.voiceCloning = cloned;
+    settings.voiceCloningConsent = consent;
+  }
+  if (Object.keys(settings).length) body.settings = settings;
+  let b: Json;
+  try {
+    b = (await ctx.api.request("PATCH", path("/v1/broadcasts/", id), { json: body, signal: ctx.signal })).data;
+  } catch (e) {
+    if (e instanceof ToolError && e.code === "invalid_state") {
+      throw new ToolError("invalid_state", "This broadcast is in the trash; restore it in the VocalStack Dashboard first.");
+    }
+    if (e instanceof ToolError && e.message === "private broadcasts need a password") {
+      throw bad("A private broadcast needs a `password` (at least 4 characters) the first time.");
+    }
+    consentError(e);
+  }
+  return {
+    ...brief(b),
+    spokenLanguage: b.settings?.spokenLanguage ?? "auto",
+    spokenTranslations: b.settings?.translationTts === true,
+    clonedVoices: b.settings?.voiceCloning === true,
+  };
 }
 
 const ON_AIR = "This broadcast is already on air; stop it first (stop_broadcast) or use another broadcast.";
@@ -1075,15 +1155,15 @@ export const handlers: Record<string, Handler> = {
   get_transcription: getTranscription,
   list_transcriptions: listTranscriptions,
   search_transcriptions: search,
-  get_summary: summary,
-  rename_speaker: renameSpeaker,
+  update_transcription: updateTranscription,
   delete_transcription: deleteTranscription,
-  set_cloned_voices: setClonedVoices,
   list_speakers: speakers,
   save_speaker: saveSpeaker,
+  update_speaker: updateSpeaker,
   delete_speaker: deleteSpeaker,
   list_broadcasts: listBroadcasts,
   start_broadcast: startBroadcast,
+  update_broadcast: updateBroadcast,
   stop_broadcast: stopBroadcast,
   delete_broadcast: deleteBroadcast,
 };

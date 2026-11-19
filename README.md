@@ -62,18 +62,18 @@ Both offer the same tools.
 
 <!-- tools -->
 - `create_transcription`: Start transcribing a finished recording, from a public link or a file sent inline; returns a transcriptionId at once, before any text.
-- `get_transcription`: Read one transcription's status and text, with timestamps and speakers: as it was spoken or translated, at once or after waiting for it to finish.
+- `get_transcription`: Read one transcription's status and text, with timestamps and speakers, or its title and summary: as spoken or translated, at once or after waiting for it to finish.
 - `list_transcriptions`: List this account's transcriptions, newest first, a page at a time: files, links and live ones, including those broadcasts recorded.
 - `search_transcriptions`: Find what was said across this account's transcriptions, or in one: the lines with given words or a name (mode words), or the passages that answer a question (mode meaning).
-- `get_summary`: Get the title and summary of a finished transcription, writing one the first time if it has none.
-- `rename_speaker`: Name or rename a speaker: one person in one transcription, so its transcript shows the name instead of "Speaker N", or a saved speaker, everywhere they are recognised.
+- `update_transcription`: Change a transcription: its name, its public share link, its summary, or whether spoken translations use the speakers' own cloned voices.
 - `delete_transcription`: Move a transcription to the trash, with its recordings, transcript, translations and summary; its share links stop working.
-- `set_cloned_voices`: Turn cloned voices on or off for spoken translations: for one transcription, or for one saved speaker everywhere they are recognised.
 - `list_speakers`: List the speakers this account has saved: people recognised by name in every new transcription.
 - `save_speaker`: Save one speaker of a transcription to the account's saved speakers, so later transcriptions recognise and name them; their own speech in this transcription is the sample.
+- `update_speaker`: Change a speaker: name one person in one transcription (instead of "Speaker N"), or rename a saved speaker and switch their cloned voice on or off, everywhere they are recognised.
 - `delete_speaker`: Delete a saved speaker for good: their name, fingerprint, stored sample and any cloned voice are erased at once and cannot be restored.
 - `list_broadcasts`: List this account's broadcasts, or get one in detail.
 - `start_broadcast`: Start live transcription and translation of a stream playing now, on a public link listeners open in their own language.
+- `update_broadcast`: Change a broadcast's settings: its name, who can listen (public, or private with a password), the language spoken, and whether translations are read aloud, in stock or the speakers' own cloned voices.
 - `stop_broadcast`: Stop the live transcription a broadcast is running, which also stops its billing.
 - `delete_broadcast`: Move a broadcast to the trash: its public link and stream addresses stop working for listeners.
 <!-- /tools -->
