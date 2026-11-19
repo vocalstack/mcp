@@ -61,24 +61,21 @@ Both offer the same tools.
 ## Tools
 
 <!-- tools -->
-- `transcribe_url`: Start transcribing a recorded audio or video at a public link: a media file, a podcast episode, a YouTube video, or a public post on one of the sites listed under url.
-- `transcribe_file`: Start transcribing an audio or video file you hold, sent whole as base64 (at most 10 MiB decoded; mp3, m4a, wav, mp4, webm and other common formats).
-- `get_transcription`: Read one transcription's text, with timestamps and speakers, and its status.
-- `wait_for_transcription`: Wait until a file or link transcription finishes, up to timeoutS seconds (default 50, at most 60), and return its status without the text.
-- `list_transcriptions`: List this account's transcriptions (files, links and live ones, including those recorded by broadcasts), newest first, one page at a time.
-- `search_transcriptions`: Find the lines where given words or a name were said, across all of this account's transcriptions or in one (transcriptionId).
-- `search_by_meaning`: Find the passages closest in meaning to a question or topic, across this account's transcriptions or in one (transcriptionId), in any language and even when they share none of its words.
-- `get_summary`: Get the title and summary of a finished transcription.
-- `translate_transcription`: Get a whole finished transcription translated into another language, in the same text or segments shape as get_transcription.
+- `transcribe`: Start transcribing a finished recording, from a public link or a file sent inline; returns a transcriptionId at once, before any text.
+- `get_transcription`: Read one transcription's status and text, with timestamps and speakers: as it was spoken or translated, at once or after waiting for it to finish.
+- `list_transcriptions`: List this account's transcriptions, newest first, a page at a time: files, links and live ones, including those broadcasts recorded.
+- `search_transcriptions`: Find what was said across this account's transcriptions, or in one: the lines with given words or a name (mode words), or the passages that answer a question (mode meaning).
+- `get_summary`: Get the title and summary of a finished transcription, writing one the first time if it has none.
 - `rename_speaker`: Name a speaker in one transcription, so its transcript shows the name instead of "Speaker N".
-- `delete_transcription`: Delete a transcription: it moves to the trash with its recordings, transcript, translations and summary, and its share links stop working.
-- `list_voices`: List the voices that can read translations aloud in one language: stock voices and this account's own cloned voices.
+- `delete_transcription`: Move a transcription to the trash, with its recordings, transcript, translations and summary; its share links stop working.
+- `restore_transcription`: Bring a deleted transcription back from the trash, with its recordings, transcript, translations, summary and working share links.
 - `set_cloned_voices`: Turn cloned voices on or off for one transcription's spoken translations.
-- `list_speakers`: List the speakers this account has saved: people named once so they are recognised by name in later transcriptions.
-- `list_broadcasts`: List this account's broadcasts, most recently updated first (up to 500, no paging).
-- `get_broadcast`: Get one broadcast in detail: whether it is on air, its public link, the transcriptions it recorded and the stream addresses it uses.
-- `start_broadcast`: Start live transcription and translation of a live stream (YouTube live, internet radio, HLS .m3u8 or Icecast).
-- `stop_broadcast`: Stop the live transcription a broadcast is running (started with start_broadcast), which also stops its billing.
+- `list_speakers`: List the speakers this account has saved: people recognised by name in every new transcription.
+- `save_speaker`: Save one speaker of a transcription to the account's saved speakers, so later transcriptions recognise and name them; their own speech in this transcription is the sample.
+- `delete_speaker`: Delete a saved speaker for good: their name, fingerprint, stored sample and any cloned voice are erased at once and cannot be restored.
+- `list_broadcasts`: List this account's broadcasts, or get one in detail.
+- `start_broadcast`: Start live transcription and translation of a stream playing now, on a public link listeners open in their own language.
+- `stop_broadcast`: Stop the live transcription a broadcast is running, which also stops its billing.
 <!-- /tools -->
 
 Errors come back as tool results with `isError` set and a body with `error` (a code such as `not_found`, `invalid_options`, `invalid_state`, `insufficient_credit` or `rate_limited`), `message`, `retryable`, `retryAfterS` and `topUpUrl` when credit is needed. Retry a start with the same `idempotencyKey` so nothing is made or billed twice.

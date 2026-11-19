@@ -3,17 +3,9 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { handlers } from "../dist/handlers.js";
 
-export const PENDING = ["transcribe", "restore_transcription", "save_speaker", "delete_speaker"];
+export const PENDING = [];
 
-export const RETIRED = [
-  "transcribe_url",
-  "transcribe_file",
-  "wait_for_transcription",
-  "translate_transcription",
-  "search_by_meaning",
-  "get_broadcast",
-  "list_voices",
-];
+export const RETIRED = [];
 
 export function check(tools, names = Object.keys(handlers), pending = PENDING, retired = RETIRED) {
   const problems = [];
