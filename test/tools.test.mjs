@@ -761,7 +761,7 @@ test("update_transcription summary true writes one; a read-only key is refused; 
   r = await call(client, "update_transcription", { transcriptionId: TID, summary: false });
   assert.equal(r.content[0].text, "`summary` takes only true (write one now); a summary is never deleted");
   r = await call(client, "update_transcription", { transcriptionId: TID });
-  assert.equal(r.content[0].text, "give at least one of `name`, `shareLink`, `summary` or `clonedVoices` to change");
+  assert.equal(r.content[0].text, "give at least one of `name`, `shareLink`, `summary`, `clonedVoices` or `restore` to change");
   assert.equal(fake.requests.length, 0);
 });
 
@@ -906,7 +906,7 @@ test("update_transcription clonedVoices: no consent, a deleted transcription, an
   fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ lifecycle: "archived" }) });
   r = await call(client, "update_transcription", { transcriptionId: TID, clonedVoices: true, consent: true });
   assert.equal(r.structuredContent.error, "invalid_state");
-  assert.equal(r.content[0].text, "This transcription is in the trash; restore it in the VocalStack Dashboard first.");
+  assert.equal(r.content[0].text, "This transcription is in the trash; pass restore: true to bring it back.");
   fake.reset();
   fake.on("GET", `/v1/transcriptions/${TID}`, apiError(404, "not_found", "transcription not found"));
   r = await call(client, "update_transcription", { transcriptionId: TID, clonedVoices: false });
@@ -1369,6 +1369,39 @@ test("update_speaker clonedVoice: exactly one target, consent, a refused speaker
   r = await call(client, "update_speaker", { speakerId: SPK, clonedVoice: true, consent: true });
   assert.equal(r.structuredContent.error, "forbidden");
   assert.deepEqual(r.structuredContent.details, { requiredScope: ["write"] });
+});
+
+test("update_transcription and update_broadcast restore true bring one back from the trash", async () => {
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ lifecycle: "archived" }) });
+  fake.on("POST", `/v1/transcriptions/${TID}/restore`, { body: tx() });
+  fake.on("PATCH", `/v1/transcriptions/${TID}`, { body: tx({ name: "Back" }) });
+  fake.on("GET", `/v1/transcriptions/${TID}/share-links`, { body: { links: [] } });
+  let r = await call(client, "update_transcription", { transcriptionId: TID, restore: true, name: "Back" });
+  assert.equal(r.isError, undefined, r.content[0].text);
+  assert.equal(only("POST", `/v1/transcriptions/${TID}/restore`).length, 1);
+  assert.equal(r.structuredContent.restored, true);
+  assert.equal(r.structuredContent.name, "Back");
+  fake.reset();
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx() });
+  fake.on("GET", `/v1/transcriptions/${TID}/share-links`, { body: { links: [] } });
+  r = await call(client, "update_transcription", { transcriptionId: TID, restore: true });
+  assert.equal(r.structuredContent.restored, false);
+  assert.equal(only("POST", `/v1/transcriptions/${TID}/restore`).length, 0);
+  fake.reset();
+  r = await call(client, "update_transcription", { transcriptionId: TID, restore: false });
+  assert.equal(r.structuredContent.error, "invalid_options");
+  fake.on("GET", `/v1/broadcasts/${BID}`, { body: bcast({ lifecycle: "archived" }) });
+  fake.on("POST", `/v1/broadcasts/${BID}/restore`, { body: bcast() });
+  r = await call(client, "update_broadcast", { broadcastId: BID, restore: true });
+  assert.equal(r.isError, undefined, r.content[0].text);
+  assert.equal(only("POST", `/v1/broadcasts/${BID}/restore`).length, 1);
+  assert.equal(only("PATCH", `/v1/broadcasts/${BID}`).length, 0);
+  assert.equal(r.structuredContent.restored, true);
+  fake.reset();
+  fake.on("GET", `/v1/broadcasts/${BID}`, { body: bcast({ lifecycle: "archived" }) });
+  fake.on("PATCH", `/v1/broadcasts/${BID}`, apiError(409, "invalid_state", "broadcast is archived"));
+  r = await call(client, "update_broadcast", { broadcastId: BID, name: "Back" });
+  assert.equal(r.content[0].text, "This broadcast is in the trash; pass restore: true to bring it back.");
 });
 
 test("update_broadcast patches name, access, password and settings, and reports them", async () => {

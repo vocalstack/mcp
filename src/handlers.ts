@@ -966,17 +966,22 @@ async function updateTranscription(a: Args, ctx: Context): Promise<Json> {
     if (n === 0 || n > 200) throw bad("`name` must be 1 to 200 characters");
   }
   const share = optBool(a, "shareLink");
+  const restore = optBool(a, "restore");
+  if (restore === false) throw bad("`restore` takes only true (bring it back from the trash); delete_transcription moves it there");
   const summary = optBool(a, "summary");
   const cloned = optBool(a, "clonedVoices");
   const consent = a.bool("consent");
   if (summary === false) throw bad("`summary` takes only true (write one now); a summary is never deleted");
-  if (name === undefined && share === undefined && summary === undefined && cloned === undefined) {
-    throw bad("give at least one of `name`, `shareLink`, `summary` or `clonedVoices` to change");
+  if (name === undefined && share === undefined && summary === undefined && cloned === undefined && restore === undefined) {
+    throw bad("give at least one of `name`, `shareLink`, `summary`, `clonedVoices` or `restore` to change");
   }
   if (cloned === true && !consent) throw bad(NEEDS_CONSENT);
   let t = await transcription(ctx, id);
-  if (t.lifecycle && t.lifecycle !== "active") {
-    throw new ToolError("invalid_state", "This transcription is in the trash; restore it in the VocalStack Dashboard first.");
+  const restored = restore === true && t.lifecycle === "archived";
+  if (restored) {
+    t = (await ctx.api.request("POST", path("/v1/transcriptions/", id, "/restore"), { signal: ctx.signal })).data;
+  } else if (t.lifecycle && t.lifecycle !== "active") {
+    throw new ToolError("invalid_state", "This transcription is in the trash; pass restore: true to bring it back.");
   }
   const written = summary === true ? await writeSummary(ctx, id, t) : undefined;
   if (name !== undefined || cloned !== undefined) {
@@ -998,6 +1003,7 @@ async function updateTranscription(a: Args, ctx: Context): Promise<Json> {
     links = [];
   }
   const out: Json = { transcriptionId: t.id, name: t.name, shareUrl: links[0]?.url ?? null, clonedVoices: t.settings?.voiceCloning === true };
+  if (restore !== undefined) out.restored = restored;
   if (written) out.summary = written;
   return out;
 }
@@ -1011,11 +1017,16 @@ async function updateBroadcast(a: Args, ctx: Context): Promise<Json> {
   const speak = optBool(a, "spokenTranslations");
   const cloned = optBool(a, "clonedVoices");
   const consent = a.bool("consent");
-  if ([name, access, password, spokenRaw, speak, cloned].every((v) => v === undefined)) {
-    throw bad("give at least one of `name`, `access`, `password`, `spokenLanguage`, `spokenTranslations` or `clonedVoices` to change");
+  const restore = optBool(a, "restore");
+  if (restore === false) throw bad("`restore` takes only true (bring it back from the trash); delete_broadcast moves it there");
+  const changes = [name, access, password, spokenRaw, speak, cloned].some((v) => v !== undefined);
+  if (!changes && restore === undefined) {
+    throw bad("give at least one of `name`, `access`, `password`, `spokenLanguage`, `spokenTranslations`, `clonedVoices` or `restore` to change");
   }
   if (cloned === true && !consent) throw bad(NEEDS_CONSENT);
-  await broadcast(ctx, id);
+  let b: Json = await broadcast(ctx, id);
+  const restored = restore === true && b.lifecycle === "archived";
+  if (restored) b = (await ctx.api.request("POST", path("/v1/broadcasts/", id, "/restore"), { signal: ctx.signal })).data;
   const body: Json = {};
   if (name !== undefined) body.name = name;
   if (access !== undefined) body.access = access;
@@ -1031,12 +1042,11 @@ async function updateBroadcast(a: Args, ctx: Context): Promise<Json> {
     settings.voiceCloningConsent = consent;
   }
   if (Object.keys(settings).length) body.settings = settings;
-  let b: Json;
-  try {
+  if (changes) try {
     b = (await ctx.api.request("PATCH", path("/v1/broadcasts/", id), { json: body, signal: ctx.signal })).data;
   } catch (e) {
     if (e instanceof ToolError && e.code === "invalid_state") {
-      throw new ToolError("invalid_state", "This broadcast is in the trash; restore it in the VocalStack Dashboard first.");
+      throw new ToolError("invalid_state", "This broadcast is in the trash; pass restore: true to bring it back.");
     }
     if (e instanceof ToolError && e.message === "private broadcasts need a password") {
       throw bad("A private broadcast needs a `password` (at least 4 characters) the first time.");
@@ -1048,6 +1058,7 @@ async function updateBroadcast(a: Args, ctx: Context): Promise<Json> {
     spokenLanguage: b.settings?.spokenLanguage ?? "auto",
     spokenTranslations: b.settings?.translationTts === true,
     clonedVoices: b.settings?.voiceCloning === true,
+    ...(restore !== undefined ? { restored } : {}),
   };
 }
 
