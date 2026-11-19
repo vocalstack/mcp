@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { handlers } from "../dist/handlers.js";
 
-export const PENDING = ["rename_speaker", "delete_transcription", "set_cloned_voices"];
+export const PENDING = [];
 
 export function check(tools, names = Object.keys(handlers), pending = PENDING) {
   const problems = [];

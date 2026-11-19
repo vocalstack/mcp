@@ -101,7 +101,7 @@ test("initialize carries the stored instructions and this package's version", ()
 test("tools/list is exactly tools.json", async () => {
   const { tools } = await client.listTools();
   assert.deepEqual(tools, DEFS.tools);
-  assert.equal(tools.length, 15);
+  assert.equal(tools.length, 18);
 });
 
 test("every request carries the key, the user agent and asks for JSON", async () => {
