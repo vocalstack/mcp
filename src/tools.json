@@ -1,34 +1,43 @@
 {
-  "instructions": "VocalStack transcribes and translates audio and video, recorded or live. Start a job with transcribe_url (a link) or transcribe_file (base64, up to 10 MiB); both return a transcriptionId at once. Follow it with wait_for_transcription (blocks up to 60 s; call again while timedOut is true), then read it with get_transcription. list_transcriptions and search_transcriptions find earlier work, live transcriptions included; search_by_meaning finds the passages that answer a question about it, in any language; get_summary and translate_transcription work on finished transcriptions. Broadcasts are live events listeners follow at a public link, reading or hearing what is said in their own language: list_broadcasts and get_broadcast show them (link, on air, listeners); start_broadcast transcribes and translates a live stream on one, get_transcription reads it as it runs, and stop_broadcast ends it.",
+  "instructions": "VocalStack transcribes and translates audio and video, recorded or live, in about 100 languages, with speaker labels. Recorded audio: start with transcribe_url (a public link, including YouTube and many video sites) or transcribe_file (base64, up to 10 MiB); both return a transcriptionId at once. Follow it with wait_for_transcription (blocks up to 60 s; call again while timedOut is true), then read it with get_transcription (pages of segments: pass nextOffset back as offset). Earlier work: list_transcriptions lists it, search_transcriptions finds exact words or names, search_by_meaning finds the passages that answer a question in any language; get_summary and translate_transcription work on finished transcriptions. Live: broadcasts are live events listeners follow at a public link, reading or hearing what is said in their own language: list_broadcasts and get_broadcast show them (link, on air, listeners); start_broadcast transcribes and translates a live stream on one, get_transcription reads it as it runs, and stop_broadcast ends it. Cost: only transcription is billed, per second of audio (transcribe_url, transcribe_file, and start_broadcast while it runs); reading, searching, summaries, translations and listeners are free. Retry a start with the same idempotencyKey so nothing is made twice. Errors come back as a tool result with isError true and a body with error (a code such as not_found, invalid_options, invalid_state, insufficient_credit, rate_limited), message, retryable, retryAfterS and topUpUrl when credit is needed.",
   "tools": [
     {
       "name": "transcribe_url",
-      "description": "Start transcribing audio or video at a public URL (a file link, a podcast episode, a YouTube video, a Vimeo, TikTok, X or SoundCloud post…). Returns at once with a transcriptionId; call wait_for_transcription to follow it, then get_transcription for the text. Set summary for a title and summary, shareLink for a public link to the transcript.",
+      "description": "Start transcribing a recording at a public link: a direct audio or video file, a podcast episode, a YouTube video, or a public post on Vimeo, TikTok, X, SoundCloud or another site listed under url. Use transcribe_file instead for a file you hold (up to 10 MiB), and start_broadcast for a live stream, which this tool refuses. Returns at once, before any text, with the new transcription's status: transcriptionId, kind \"file\", state (\"queued\" at first, then \"fetching\", \"transcribing\", and finally \"done\", \"failed\" or \"stopped\"), progress, plus shareUrl when shareLink is true. Then call wait_for_transcription, and get_transcription for the text. Cost: billed per second of audio transcribed (only startS to endS when set; a plan may add a minimum charge); a refused call costs nothing. Calling it again makes and bills a second transcription unless you send the same idempotencyKey. Errors come back as a tool error with a code: invalid_options for a link that is not a public http(s) address, insufficient_credit (with topUpUrl) when the account cannot pay, quota_exceeded or rate_limited when too many are started; a link that cannot be read is reported later as state \"failed\" with an error message.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "endS": {
-            "description": "Transcribe up to this second; at least 0.5 s after startS.",
+            "description": "Transcribe only up to this second (default: the end); at least 0.5 s after startS. Only the part transcribed is billed.",
+            "examples": [
+              600
+            ],
             "type": "number"
           },
           "idempotencyKey": {
-            "description": "Send the same key when retrying the same call: the first result comes back and nothing is created twice (24 h).",
+            "description": "Any unique string of visible ASCII. Send the same key with the same arguments when retrying: for 24 h the first result comes back (with replayed true) and nothing is created or billed twice.",
+            "examples": [
+              "meeting-2026-11-19"
+            ],
             "maxLength": 255,
             "type": "string"
           },
           "name": {
-            "description": "Display name. Defaults to the file name or the link.",
+            "description": "Display name shown in lists and on the share page. Defaults to the file name or the link.",
+            "examples": [
+              "Weekly team call"
+            ],
             "maxLength": 200,
             "type": "string"
           },
           "shareLink": {
             "default": false,
-            "description": "Make a public link anyone can open to read the transcript (shareUrl in the result). Off: the transcription stays private.",
+            "description": "Make a public link anyone can open to read the transcript, without signing in (shareUrl in the result). Off (the default): the transcription stays private to this account.",
             "type": "boolean"
           },
           "speakerLabels": {
             "default": "auto",
-            "description": "Label who is speaking: auto (the default) labels lines once a second speaker is heard, on labels every line, off none. Never under a minute.",
+            "description": "Label who is speaking: auto (the default) labels lines once a second speaker is heard, on labels every line, off none. Recordings under a minute are never labelled.",
             "enum": [
               "auto",
               "on",
@@ -36,21 +45,32 @@
             ]
           },
           "spokenLanguage": {
-            "description": "Spoken language code (e.g. en, ro, es). Omit to detect it.",
+            "description": "Code of the language spoken, e.g. en, ro, es. Omit to detect it (recordings that switch language are handled too); set it when you know it, for better accuracy on short or noisy audio.",
+            "examples": [
+              "en",
+              "es"
+            ],
             "type": "string"
           },
           "startS": {
-            "description": "Transcribe from this second.",
+            "description": "Transcribe only from this second of the recording (default: the start). Only the part transcribed is billed.",
+            "examples": [
+              90
+            ],
             "minimum": 0,
             "type": "number"
           },
           "summary": {
             "default": false,
-            "description": "Also write a title and summary once it is done (get_summary reads it; asking get_summary later writes one anyway). Never for a transcription under a minute.",
+            "description": "Also write a title and summary once it is done, at no extra cost (get_summary reads it; asking get_summary later writes one anyway). Never for a transcription under a minute.",
             "type": "boolean"
           },
           "url": {
-            "description": "http(s) link to an audio or video file, a YouTube video, or a public recording on Twitch, Facebook, Instagram, Vimeo, Dailymotion, TikTok, X, SoundCloud, Kick, Mixcloud, Bandcamp, LinkedIn, TED, Internet Archive, Streamable, Odysee, Niconico, VK, BitChute, Wistia, Vidyard, Kaltura, JW Player, Pinterest, Bluesky, Google Drive, Spreaker, iHeartRadio, Audioboom, CNN or Loom. Live streams are not accepted here.",
+            "description": "Public http(s) link to an audio or video file, a YouTube video, or a public recording on Twitch, Facebook, Instagram, Vimeo, Dailymotion, TikTok, X, SoundCloud, Kick, Mixcloud, Bandcamp, LinkedIn, TED, Internet Archive, Streamable, Odysee, Niconico, VK, BitChute, Wistia, Vidyard, Kaltura, JW Player, Pinterest, Bluesky, Google Drive, Dropbox, Spreaker, iHeartRadio, Audioboom, CNN or Loom. It must open without signing in. Live streams are not accepted here (use start_broadcast).",
+            "examples": [
+              "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+              "https://example.com/episode-12.mp3"
+            ],
             "format": "uri",
             "maxLength": 2048,
             "type": "string"
@@ -70,45 +90,62 @@
     },
     {
       "name": "transcribe_file",
-      "description": "Start transcribing an audio or video file you have, sent as base64 (at most 10 MiB decoded). Returns at once with a transcriptionId; call wait_for_transcription next. Set summary for a title and summary, shareLink for a public link to the transcript.",
+      "description": "Start transcribing an audio or video file you hold, sent whole as base64 in fileBase64 (at most 10 MiB once decoded; mp3, m4a, wav, mp4, webm and other common formats). Use transcribe_url instead for anything larger or already online, and start_broadcast for a live stream. Returns at once, before any text, with the new transcription's status: transcriptionId, kind \"file\", state (\"queued\" at first, then \"transcribing\", and finally \"done\", \"failed\" or \"stopped\"), progress, plus shareUrl when shareLink is true. Then call wait_for_transcription, and get_transcription for the text. Cost: billed per second of audio transcribed (only startS to endS when set; a plan may add a minimum charge); a refused call costs nothing. Calling it again makes and bills a second transcription unless you send the same idempotencyKey. Errors come back as a tool error with a code: invalid_options for bad base64 or a file over 10 MiB, invalid_audio for an empty file, insufficient_credit (with topUpUrl) when the account cannot pay, quota_exceeded or rate_limited when too many are started; audio that cannot be decoded is reported later as state \"failed\" with an error message.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "endS": {
-            "description": "Transcribe up to this second; at least 0.5 s after startS.",
+            "description": "Transcribe only up to this second (default: the end); at least 0.5 s after startS. Only the part transcribed is billed.",
+            "examples": [
+              600
+            ],
             "type": "number"
           },
           "fileBase64": {
-            "description": "The whole file, base64. At most 10 MiB decoded; for a larger file use transcribe_url with a link to it.",
+            "contentEncoding": "base64",
+            "description": "The whole file, standard base64 (a data: URL prefix and line breaks are accepted). At most 10 MiB decoded; for a larger file use transcribe_url with a link to it.",
             "type": "string"
           },
           "filename": {
-            "description": "The file's name, with its extension (meeting.m4a).",
+            "description": "The file's name, with its extension; also the default display name.",
+            "examples": [
+              "meeting.m4a"
+            ],
             "maxLength": 255,
             "type": "string"
           },
           "idempotencyKey": {
-            "description": "Send the same key when retrying the same call: the first result comes back and nothing is created twice (24 h).",
+            "description": "Any unique string of visible ASCII. Send the same key with the same arguments when retrying: for 24 h the first result comes back (with replayed true) and nothing is created or billed twice.",
+            "examples": [
+              "meeting-2026-11-19"
+            ],
             "maxLength": 255,
             "type": "string"
           },
           "mimeType": {
-            "description": "e.g. audio/mpeg. Optional.",
+            "description": "The file's media type, when known. Optional: the format is read from the file itself.",
+            "examples": [
+              "audio/mpeg",
+              "video/mp4"
+            ],
             "type": "string"
           },
           "name": {
-            "description": "Display name. Defaults to the file name or the link.",
+            "description": "Display name shown in lists and on the share page. Defaults to the file name or the link.",
+            "examples": [
+              "Weekly team call"
+            ],
             "maxLength": 200,
             "type": "string"
           },
           "shareLink": {
             "default": false,
-            "description": "Make a public link anyone can open to read the transcript (shareUrl in the result). Off: the transcription stays private.",
+            "description": "Make a public link anyone can open to read the transcript, without signing in (shareUrl in the result). Off (the default): the transcription stays private to this account.",
             "type": "boolean"
           },
           "speakerLabels": {
             "default": "auto",
-            "description": "Label who is speaking: auto (the default) labels lines once a second speaker is heard, on labels every line, off none. Never under a minute.",
+            "description": "Label who is speaking: auto (the default) labels lines once a second speaker is heard, on labels every line, off none. Recordings under a minute are never labelled.",
             "enum": [
               "auto",
               "on",
@@ -116,17 +153,24 @@
             ]
           },
           "spokenLanguage": {
-            "description": "Spoken language code (e.g. en, ro, es). Omit to detect it.",
+            "description": "Code of the language spoken, e.g. en, ro, es. Omit to detect it (recordings that switch language are handled too); set it when you know it, for better accuracy on short or noisy audio.",
+            "examples": [
+              "en",
+              "es"
+            ],
             "type": "string"
           },
           "startS": {
-            "description": "Transcribe from this second.",
+            "description": "Transcribe only from this second of the recording (default: the start). Only the part transcribed is billed.",
+            "examples": [
+              90
+            ],
             "minimum": 0,
             "type": "number"
           },
           "summary": {
             "default": false,
-            "description": "Also write a title and summary once it is done (get_summary reads it; asking get_summary later writes one anyway). Never for a transcription under a minute.",
+            "description": "Also write a title and summary once it is done, at no extra cost (get_summary reads it; asking get_summary later writes one anyway). Never for a transcription under a minute.",
             "type": "boolean"
           }
         },
@@ -145,13 +189,13 @@
     },
     {
       "name": "get_transcription",
-      "description": "Get a transcription's status and its text with timestamps and speakers: the whole text once it is done, or the text so far while a file is transcribing or a live transcription is on air (partial is true). Use format \"text\" for plain readable text, \"segments\" for timed lines. Long transcripts are paged: ask again with nextOffset.",
+      "description": "Read one transcription: its status and its text with timestamps and speakers. Use it after wait_for_transcription reports state \"done\" (for files and links), or at any time on a live transcription to read the text so far; use format \"none\" for a quick status check, wait_for_transcription to block until a file finishes, and search_transcriptions to find a passage across many transcriptions. Read-only and free. Returns status (transcriptionId, name, kind \"file\" or \"live\", state, progress, error when it failed), segmentCount, and either text (one line per segment: \"[mm:ss] Speaker 1: words\") or segments (start and end in seconds, text, speaker number, speakerName, language, and words when includeWords is true); partial is true while text is still coming. Long transcripts come in pages of limit segments: when nextOffset is present, call again with offset set to it. An unknown id, or one from another account, gives the error not_found.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "format": {
             "default": "text",
-            "description": "text: readable lines; segments: timed lines; none: status only.",
+            "description": "text (the default): one readable string, a line per segment as \"[mm:ss] Speaker 1: words\", best for reading or quoting; segments: an array of timed lines, best for subtitles or exact times; none: status only, no text.",
             "enum": [
               "text",
               "segments",
@@ -160,23 +204,33 @@
           },
           "includeWords": {
             "default": false,
-            "description": "Word timings in segments. Large.",
+            "description": "With format segments, also return each word with its start and end second. Off by default: it makes the answer several times larger.",
             "type": "boolean"
           },
           "limit": {
             "default": 500,
+            "description": "Most segments to return in one call (default 500). When more are left the result has nextOffset; ask again with offset set to it.",
+            "examples": [
+              200
+            ],
             "maximum": 2000,
             "minimum": 1,
             "type": "integer"
           },
           "offset": {
             "default": 0,
-            "description": "First segment to return.",
+            "description": "Index of the first segment to return (default 0, the start). To page, pass the nextOffset the previous call returned.",
+            "examples": [
+              500
+            ],
             "minimum": 0,
             "type": "integer"
           },
           "transcriptionId": {
-            "description": "The transcriptionId a transcribe tool or list_transcriptions returned (the same id as `GET /v1/transcriptions/{id}`).",
+            "description": "The transcriptionId that transcribe_url, transcribe_file, list_transcriptions, a search or start_broadcast returned (the same id as `GET /v1/transcriptions/{id}`).",
+            "examples": [
+              "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a"
+            ],
             "format": "uuid",
             "type": "string"
           }
@@ -195,18 +249,25 @@
     },
     {
       "name": "wait_for_transcription",
-      "description": "Wait for a file or link transcription to finish, up to 60 seconds per call. Returns its status; if timedOut is true it is still running, so call this again. When state is done, call get_transcription for the text. A live transcription runs until it is stopped, so this returns its status at once.",
+      "description": "Block until a file or link transcription (from transcribe_url or transcribe_file) finishes, for at most timeoutS seconds (default 50, at most 60), then return its status. Use it instead of calling get_transcription in a loop; it does not return the text. Read-only and free; while it waits, clients that send a progress token receive progress notifications. Returns the status: transcriptionId, name, kind, state (\"queued\", \"cropping\", \"fetching\", \"transcribing\", then \"done\", \"failed\" or \"stopped\"), progress (pct, processedS, totalS), error when it failed, and timedOut. If timedOut is true it is still running: call this again. When state is \"done\", call get_transcription for the text; when \"failed\", error says why. A live transcription runs until it is stopped, so for one this returns its status at once. An unknown id gives not_found; more than 4 waits open at once per key (8 per account) gives rate_limited.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "timeoutS": {
             "default": 50,
+            "description": "Longest to wait in this call, in seconds (default 50, at most 60). It returns sooner when the transcription finishes; otherwise it returns with timedOut true and you call it again. Lower it if your client gives up on calls sooner.",
+            "examples": [
+              30
+            ],
             "maximum": 60,
             "minimum": 1,
             "type": "integer"
           },
           "transcriptionId": {
-            "description": "The transcriptionId a transcribe tool or list_transcriptions returned (the same id as `GET /v1/transcriptions/{id}`).",
+            "description": "The transcriptionId that transcribe_url, transcribe_file, list_transcriptions, a search or start_broadcast returned (the same id as `GET /v1/transcriptions/{id}`).",
+            "examples": [
+              "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a"
+            ],
             "format": "uuid",
             "type": "string"
           }
@@ -225,17 +286,17 @@
     },
     {
       "name": "list_transcriptions",
-      "description": "List this account's transcriptions, newest first, with their status: files and links (kind file) and live transcriptions, including those of broadcasts (kind live). Use search_transcriptions to find what was said.",
+      "description": "List this account's transcriptions, newest first, one page at a time. Use it to find an id or check what exists; use search_transcriptions to find what was said, search_by_meaning to answer a question about the content, and get_transcription to read one. Read-only and free. Returns transcriptions, each with transcriptionId, name, createdAt, kind (\"file\" for files and links, \"live\" for live transcriptions, including those of broadcasts, with their broadcastId), state, durationS and title when known, plus nextCursor when there are more: pass it back as cursor for the next page. An empty account returns an empty list. lifecycle \"archived\" lists the ones in the trash instead.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "cursor": {
-            "description": "From the previous page's nextCursor.",
+            "description": "Omit for the first page (the newest). For the next page, pass the nextCursor the previous call returned, unchanged.",
             "type": "string"
           },
           "lifecycle": {
             "default": "active",
-            "description": "active: in use; archived: in the trash; all: both.",
+            "description": "Which transcriptions to list: active (the default) those in use; archived those in the trash; all both.",
             "enum": [
               "active",
               "archived",
@@ -244,6 +305,10 @@
           },
           "limit": {
             "default": 20,
+            "description": "Most transcriptions in one page (default 20, at most 100). nextCursor in the result means there are more.",
+            "examples": [
+              50
+            ],
             "maximum": 100,
             "minimum": 1,
             "type": "integer"
@@ -260,27 +325,43 @@
     },
     {
       "name": "search_transcriptions",
-      "description": "Search what was said across this account's transcriptions, in any language. Returns matching lines with the transcription they are in and the second they were said.",
+      "description": "Find the lines where given words were said, across all of this account's transcriptions or within one (transcriptionId). It matches the words themselves, allowing close spellings, and a query in another language is also searched in English; use search_by_meaning instead for a question or topic whose exact words you do not know, and get_transcription to read the context around a hit. Read-only and free. Returns query, queryEn (the query as searched in English), and hits, best first (whole-word matches, then closeness, then newest): each with transcriptionId, name, mediaStart (the second it was said), speaker, text, score, live, recordedAt, and rendered (the line in lang, when lang is set). No match gives an empty hits list. An unknown transcriptionId gives not_found.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "lang": {
-            "description": "Also return each hit translated into this language.",
+            "description": "Optional language code: also return each matching line translated into it, as rendered. It does not change what is searched.",
+            "examples": [
+              "en",
+              "de"
+            ],
             "type": "string"
           },
           "limit": {
             "default": 20,
+            "description": "Most matching lines to return, best first (default 20, at most 50). There is no next page: narrow the query or set transcriptionId instead.",
+            "examples": [
+              10
+            ],
             "maximum": 50,
             "minimum": 1,
             "type": "integer"
           },
           "query": {
+            "description": "Words, a phrase or a name that was said (2 to 200 characters), in any language.",
+            "examples": [
+              "quarterly budget",
+              "María"
+            ],
             "maxLength": 200,
             "minLength": 2,
             "type": "string"
           },
           "transcriptionId": {
-            "description": "Search only this one.",
+            "description": "Optional: search only this transcription (a transcriptionId from list_transcriptions or a transcribe tool). Omit to search all of this account's transcriptions.",
+            "examples": [
+              "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a"
+            ],
             "format": "uuid",
             "type": "string"
           }
@@ -299,18 +380,25 @@
     },
     {
       "name": "search_by_meaning",
-      "description": "Find the passages of this account's transcriptions closest in meaning to a question or topic, in any language, even when they share none of its words (vector search). Returns up to 10 passages, closest first, with the transcription, the second it starts and how close it is (0 to 1). Use them to answer questions about what was said, and cite the transcription and second.",
+      "description": "Find the passages of this account's transcriptions closest in meaning to a question or topic, in any language, even when they share none of its words (vector search). Use it to answer questions about what was said (\"what did they decide about the budget?\"); use search_transcriptions instead to find exact words or a name, and get_summary for an overview of one transcription. Set transcriptionId to search only that one. Read-only and free, but limited per hour on some plans (searchesLeftThisHour shows what is left; past it, rate_limited). Returns query, state (\"ready\"; \"unavailable\" or \"off\" when this search cannot run, with no passages) and up to 10 passages, closest first, each with transcriptionId, name, mediaStart and mediaEnd in seconds, text, similarity (0 to 1) and live. Cite the transcription and second in your answer. An unknown transcriptionId gives not_found.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "query": {
-            "description": "A question or topic, in any language.",
+            "description": "A question or topic in plain words (2 to 200 characters), in any language.",
+            "examples": [
+              "What did they decide about hiring?",
+              "pricing complaints"
+            ],
             "maxLength": 200,
             "minLength": 2,
             "type": "string"
           },
           "transcriptionId": {
-            "description": "Search only this one.",
+            "description": "Optional: search only this transcription (a transcriptionId from list_transcriptions or a transcribe tool). Omit to search all of this account's transcriptions.",
+            "examples": [
+              "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a"
+            ],
             "format": "uuid",
             "type": "string"
           }
@@ -329,16 +417,22 @@
     },
     {
       "name": "get_summary",
-      "description": "Get the title and summary of a finished transcription, optionally in another language (when it was made with summaryTranslations). Asking for it writes one if the transcription was made without a summary. If state is pending the summary is being written; call again in a few seconds. not_requested means the recording is under a minute and is never summarised.",
+      "description": "Get the title and summary of a finished transcription, written from its whole text. Use it for an overview; use get_transcription for the full text and search_by_meaning for a specific question. Not read-only: when the transcription has no summary yet, asking writes one (free, needs the write scope, and kept for next time). Returns state and, when \"ready\", title and summary (and lang when translated). Other states: \"pending\" means it is still being written, or the transcription is still running: call again in a few seconds (after wait_for_transcription if it is running); \"not_requested\" means the recording is under a minute and is never summarised; \"unavailable\" means the transcription failed. With lang, the summary comes back translated only when the transcription was made with summary translations switched on (Dashboard or REST API); otherwise the original comes back without lang. An unknown id gives not_found.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "lang": {
-            "description": "Return it translated into this language.",
+            "description": "Optional language code to have the title and summary translated into, when the transcription was made with summary translations on; otherwise the original comes back.",
+            "examples": [
+              "fr"
+            ],
             "type": "string"
           },
           "transcriptionId": {
-            "description": "The transcriptionId a transcribe tool or list_transcriptions returned (the same id as `GET /v1/transcriptions/{id}`).",
+            "description": "The transcriptionId that transcribe_url, transcribe_file, list_transcriptions, a search or start_broadcast returned (the same id as `GET /v1/transcriptions/{id}`).",
+            "examples": [
+              "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a"
+            ],
             "format": "uuid",
             "type": "string"
           }
@@ -357,34 +451,50 @@
     },
     {
       "name": "translate_transcription",
-      "description": "Get a finished transcription, from a file, a link or a live broadcast, translated into another language, as text or timed segments. Large transcriptions take up to a minute; translations are kept, so asking again is quick.",
+      "description": "Get a finished transcription translated into another language, as readable text or timed segments, in the same shape as get_transcription. Use get_summary with lang for a translated overview, and search_transcriptions with lang to translate only matching lines. Works on files and links once state is \"done\", and on a live transcription after it has stopped; earlier it gives invalid_state (read the text so far with get_transcription). The first call for a language can take up to a minute on a long transcription; translations are kept, so asking again is quick and free. Returns lang, translated (false when the transcription is already in that language), segmentCount, text or segments (start, end, text, speaker, speakerName), and nextOffset when there are more: call again with offset set to it. A language this service does not translate into gives invalid_options; an unknown id gives not_found.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "format": {
             "default": "text",
+            "description": "text (the default): one readable string, a line per segment as \"[mm:ss] Speaker 1: words\"; segments: an array of timed lines (start, end, speaker, text), best for subtitles.",
             "enum": [
               "text",
               "segments"
             ]
           },
           "lang": {
-            "description": "Target language code, e.g. es, de, ja.",
+            "description": "Code of the language to translate into, one of about 100 (e.g. es, de, ja, zh, pt).",
+            "examples": [
+              "es",
+              "ja"
+            ],
             "type": "string"
           },
           "limit": {
             "default": 500,
+            "description": "Most segments to return in one call (default 500). When more are left the result has nextOffset; ask again with offset set to it.",
+            "examples": [
+              200
+            ],
             "maximum": 2000,
             "minimum": 1,
             "type": "integer"
           },
           "offset": {
             "default": 0,
+            "description": "Index of the first segment to return (default 0, the start). To page, pass the nextOffset the previous call returned.",
+            "examples": [
+              500
+            ],
             "minimum": 0,
             "type": "integer"
           },
           "transcriptionId": {
-            "description": "The transcriptionId a transcribe tool or list_transcriptions returned (the same id as `GET /v1/transcriptions/{id}`).",
+            "description": "The transcriptionId that transcribe_url, transcribe_file, list_transcriptions, a search or start_broadcast returned (the same id as `GET /v1/transcriptions/{id}`).",
+            "examples": [
+              "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a"
+            ],
             "format": "uuid",
             "type": "string"
           }
@@ -404,12 +514,16 @@
     },
     {
       "name": "list_voices",
-      "description": "List the voices that can speak a language: id, name, gender and accent when known, and a quality rating. For information only: VocalStack picks the voice that reads each speaker; the only choice is whether cloned voices are used.",
+      "description": "List the voices that can read translations aloud in one language: stock voices and this account's own cloned voices. For information only: VocalStack picks the voice that reads each speaker; no tool takes a voice id, and whether cloned voices are used is an account setting (spokenTranslations on start_broadcast only turns reading aloud on). Use list_speakers to see the account's saved people. Read-only and free. Returns lang and voices, each with id, name, default (the one used first), cloned, quality, gender and accent when known, and previewUrl (a short sample to listen to). A language with no voices returns an empty list.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "lang": {
-            "description": "Language code, e.g. en, ro.",
+            "description": "Code of the language the voices should speak, e.g. en, ro, es.",
+            "examples": [
+              "en",
+              "ro"
+            ],
             "type": "string"
           }
         },
@@ -427,7 +541,7 @@
     },
     {
       "name": "list_speakers",
-      "description": "List the speakers this account saved: the people recognised by name in its transcriptions. Each has an id, a name, and whether their voice is cloned (cloned voices can read translations, see list_voices).",
+      "description": "List the speakers this account saved: the people it has named, so they are recognised by name in later transcriptions. Use it to see who is known; speaker names in a transcript come from get_transcription, and list_voices shows the voices available in a language. Read-only and free; takes no arguments. Returns speakers, each with id, name, gender when known, cloned (whether their own voice was cloned to read translations of what they say) and, for cloned ones, voiceReady (the clone is ready, switched on and consented to). An account with none returns an empty list.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {},
@@ -442,13 +556,13 @@
     },
     {
       "name": "list_broadcasts",
-      "description": "List this account's broadcasts: live events listeners follow at a public link, reading (or hearing) what is said, translated into their own language as it is spoken; each listener picks from up to 10 languages, free, with no app or sign-up. For each: its link, whether it is on air, how many are listening, and the live transcription it is showing.",
+      "description": "List this account's broadcasts: live events listeners follow at a public link, reading (or hearing) what is said, translated into their own language as it is spoken; each listener picks from up to 10 languages, free, with no app or sign-up. Use it to find a broadcastId for get_broadcast, start_broadcast or stop_broadcast; use list_transcriptions for files and links. Read-only and free. Returns broadcasts, each with broadcastId, name, link (the public page), access, onAir, listenersNow, and while on air the transcriptionId of the live transcription (read it with get_transcription), its state and onAirSince; lastRecordedAt and archived when they apply. lifecycle \"archived\" lists the ones in the trash.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "lifecycle": {
             "default": "active",
-            "description": "active: in use; archived: in the trash; all: both.",
+            "description": "Which broadcasts to list: active (the default) those in use; archived those in the trash; all both.",
             "enum": [
               "active",
               "archived",
@@ -467,12 +581,15 @@
     },
     {
       "name": "get_broadcast",
-      "description": "Get one broadcast: its public link, whether it is on air and since when, how many are listening, the live transcription it is showing (read it with get_transcription) and its earlier ones, and the streams it can record.",
+      "description": "Get one broadcast in detail. Use it to check whether it is on air, share its link, or find the transcriptions it recorded; list_broadcasts gives the same summary for all of them. Read-only and free. Returns broadcastId, name, link, access, onAir, listenersNow, and while on air transcriptionId, state and onAirSince; plus transcriptions (up to 20 of its live transcriptions, each with transcriptionId, name, whether it is recording now, and lastRecordedAt: read them with get_transcription or translate_transcription) and streams (the stream addresses it can record, each with name and url). An unknown id gives not_found.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "broadcastId": {
             "description": "The broadcastId list_broadcasts or start_broadcast returned (the same id as `GET /v1/broadcasts/{id}`).",
+            "examples": [
+              "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a"
+            ],
             "format": "uuid",
             "type": "string"
           }
@@ -491,36 +608,52 @@
     },
     {
       "name": "start_broadcast",
-      "description": "Start live transcription and translation of a live stream (a YouTube live, an internet radio station, an HLS or Icecast stream) on a broadcast. Returns the public link to share: anyone who opens it reads (or, with spokenTranslations, hears) the stream in their own language as it plays, and the transcriptionId to read with get_transcription. Billed per second of live transcription while it runs; listeners are free. It runs until stop_broadcast or the stream ends.",
+      "description": "Start live transcription and translation of a live stream (a YouTube live, an internet radio station, an HLS .m3u8 or Icecast stream) on a broadcast: a new one, or an existing one when broadcastId is set (its link stays the same). Use transcribe_url instead for a recording that has already ended. Returns broadcastId, name, link (the public page to share: anyone who opens it reads, or with spokenTranslations also hears, the stream in their own language as it plays), transcriptionId (read the text so far with get_transcription) and state. Cost: billed per second of live transcription while it runs; listeners are free. It runs until stop_broadcast or the stream ends, so remember to stop it. Calling it again starts a new broadcast each time unless you send the same idempotencyKey. Errors: invalid_state (with link) when that broadcast is already on air, invalid_options for an address that is not http(s), insufficient_credit (with topUpUrl) when the account cannot pay, not_found for an unknown broadcastId.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "broadcastId": {
-            "description": "Run it on this broadcast (its listeners' link stays the same). Omit to make a new broadcast.",
+            "description": "Optional: run it on this existing broadcast (from list_broadcasts), so its listeners' link stays the same. Omit to make a new broadcast with a new link.",
+            "examples": [
+              "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a"
+            ],
             "format": "uuid",
             "type": "string"
           },
           "idempotencyKey": {
-            "description": "Send the same key when retrying the same call: the first result comes back and nothing is started twice (24 h).",
+            "description": "Any unique string of visible ASCII. Send the same key with the same arguments when retrying: for 24 h the first result comes back (with replayed true) and nothing is started twice.",
+            "examples": [
+              "sunday-2026-11-22"
+            ],
             "maxLength": 255,
             "type": "string"
           },
           "name": {
-            "description": "Name of the new broadcast, shown to listeners. Defaults to the stream's host.",
+            "description": "Name of a new broadcast, shown to listeners. Defaults to the stream's host. Ignored when broadcastId is set.",
+            "examples": [
+              "Sunday service"
+            ],
             "maxLength": 200,
             "type": "string"
           },
           "spokenLanguage": {
-            "description": "Spoken language code (e.g. en, es). Omit to detect it.",
+            "description": "Code of the language spoken, e.g. en, es. Omit to detect it.",
+            "examples": [
+              "en"
+            ],
             "type": "string"
           },
           "spokenTranslations": {
             "default": false,
-            "description": "Also read each translation aloud, so listeners can hear it in their language as well as read it.",
+            "description": "Also read each translation aloud, so listeners can hear it in their language as well as read it. Off by default; listening stays free.",
             "type": "boolean"
           },
           "streamUrl": {
-            "description": "http(s) address of a live stream to transcribe and translate as it plays: a YouTube live, an internet radio station, an HLS (.m3u8) or Icecast stream.",
+            "description": "http(s) address of a live stream to transcribe and translate as it plays: a YouTube live, an internet radio station, an HLS (.m3u8) or Icecast stream. For a recording that has ended, use transcribe_url.",
+            "examples": [
+              "https://www.youtube.com/watch?v=jfKfPfyJRdk",
+              "https://stream.example.org/radio.m3u8"
+            ],
             "format": "uri",
             "maxLength": 2048,
             "type": "string"
@@ -540,12 +673,15 @@
     },
     {
       "name": "stop_broadcast",
-      "description": "Stop the live transcription a broadcast is running. The transcript is kept (get_transcription, translate_transcription, get_summary) and the link stays, for the next time it goes on air.",
+      "description": "Stop the live transcription a broadcast is running, which also stops its billing. The transcript is kept (read it with get_transcription, translate it with translate_transcription, summarise it with get_summary) and the link stays, ready for the next start_broadcast on the same broadcastId. Returns the stopped transcription's status (transcriptionId, name, kind \"live\", state \"finishing\" then \"done\", startedAt, endedAt, durationS) with broadcastId and link. Errors: invalid_state when the broadcast is not on air, not_found for an unknown broadcastId.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "broadcastId": {
             "description": "The broadcastId list_broadcasts or start_broadcast returned (the same id as `GET /v1/broadcasts/{id}`).",
+            "examples": [
+              "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a"
+            ],
             "format": "uuid",
             "type": "string"
           }
