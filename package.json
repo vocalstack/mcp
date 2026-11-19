@@ -1,0 +1,48 @@
+{
+  "name": "@vocalstack/mcp",
+  "version": "1.0.0",
+  "description": "VocalStack MCP server: transcribe, translate, search and summarize audio and video, and run live broadcasts, from any MCP client.",
+  "license": "MIT",
+  "type": "module",
+  "mcpName": "com.vocalstack/mcp",
+  "bin": {
+    "vocalstack-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vocalstack/mcp.git"
+  },
+  "homepage": "https://vocalstack.com/",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "transcription",
+    "speech-to-text",
+    "translation",
+    "live-captions",
+    "vocalstack"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && chmod +x dist/index.js",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "typescript": "^7.0.2"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
