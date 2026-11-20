@@ -4,7 +4,7 @@
     {
       "name": "create_transcription",
       "title": "Create a transcription",
-      "description": "Start transcribing a finished recording, from a public link or a file sent inline; returns a transcriptionId at once, before any text.\nUse: audio or video that has ended (a file, podcast episode, YouTube video or public post). A stream playing now: start_broadcast. The result: get_transcription with waitS, no polling needed.\nArguments: exactly one source: url, or fileBase64 with filename (over 10 MiB: host the file and give url). startS and endS clip both what is transcribed and what is billed. spokenLanguage helps short or noisy audio; speakerLabels is fixed once created, while summary and shareLink can also be turned on later with update_transcription.\nBehaviour: VocalStack's servers download the link once, as a visitor who is not signed in; nothing is posted to or changed on the source site.\nList price: $0.20 an hour of audio, billed per second transcribed; Pay as you go bills at least 5 minutes per transcription. Each call is a new, billed transcription unless it repeats an idempotencyKey; a refused call costs nothing; summary and shareLink are free.\nNew transcriptions an hour per account: 10 on Pay as you go, 100 on Premium.\nTranscriptions running at once per account: 5 on Pay as you go, 50 on Premium; more wait their turn instead of failing.\nReturns: transcriptionId, state (queued, fetching, transcribing, then done, failed or stopped), progress, shareUrl when shareLink is true, replayed true for a repeated key.\nErrors: invalid_options (neither or both of url and fileBase64, not a public http(s) link, bad base64, too large), invalid_audio (empty file), idempotency_key_reused, insufficient_credit (with topUpUrl), quota_exceeded, rate_limited (with retryAfterS). A source that cannot be read ends in state failed, with error.",
+      "description": "Start transcribing a finished recording, from a public link or a file sent inline; returns a transcriptionId at once, before any text.\nUse: audio or video that has ended (a file, podcast episode, YouTube video or public post). A stream playing now: start_broadcast. The result: get_transcription with waitS, no polling needed.\nArguments: exactly one source: url, or fileBase64 with filename (over 10 MiB: host the file and give url). startS and endS clip both what is transcribed and what is billed. spokenLanguage helps short or noisy audio; speakerLabels is fixed once created, while summary and shareLink can also be turned on later with update_transcription.\nBehaviour: VocalStack's servers download the link once, as a visitor who is not signed in; nothing is posted to or changed on the source site.\nList price: $0.20 an hour of audio, billed per second transcribed; Pay as you go bills at least 5 minutes per transcription. Each call is a new, billed transcription unless it repeats an idempotencyKey; a refused call costs nothing; summary and shareLink are free.\nNew transcriptions an hour per account: 10 on Pay as you go, 100 on Premium.\nTranscriptions running at once per account: 5 on Pay as you go, 50 on Premium; more wait their turn instead of failing.\nReturns: transcriptionId, state (queued, fetching, transcribing, then done, failed or stopped), progress, shareUrl when shareLink is true, replayed true for a repeated key.\nAPI: POST /v1/transcriptions, documented at https://api.vocalstack.com/docs.\nErrors: invalid_options (neither or both of url and fileBase64, not a public http(s) link, bad base64, too large), invalid_audio (empty file), idempotency_key_reused, insufficient_credit (with topUpUrl), quota_exceeded, terms_acceptance_required (with acceptUrl: the person opens it and accepts the Terms once, then you call again), rate_limited (with retryAfterS). A source that cannot be read ends in state failed, with error.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -64,7 +64,8 @@
               "auto",
               "on",
               "off"
-            ]
+            ],
+            "type": "string"
           },
           "spokenLanguage": {
             "description": "Code of the language spoken, e.g. en, ro, es. Omit to detect it (recordings that switch language are handled too); set it for better accuracy on short or noisy audio.",
@@ -126,7 +127,8 @@
               "vtt",
               "markdown",
               "none"
-            ]
+            ],
+            "type": "string"
           },
           "includeWords": {
             "default": false,
@@ -210,7 +212,8 @@
               "active",
               "archived",
               "all"
-            ]
+            ],
+            "type": "string"
           },
           "limit": {
             "default": 20,
@@ -264,7 +267,8 @@
             "enum": [
               "words",
               "meaning"
-            ]
+            ],
+            "type": "string"
           },
           "query": {
             "description": "mode words: words, a phrase or a name that was said. mode meaning: a question or topic in plain words; a full question works better than one keyword. Any language.",
@@ -522,7 +526,8 @@
               "active",
               "archived",
               "all"
-            ]
+            ],
+            "type": "string"
           }
         },
         "type": "object"
@@ -538,7 +543,7 @@
     {
       "name": "start_broadcast",
       "title": "Start a broadcast",
-      "description": "Start live transcription and translation of a stream playing now, on a public link listeners open in their own language; or set up a broadcast and its link ahead of the event.\nUse: a stream playing now, with listeners following live, or a broadcast to set up and share before the event. A recording that has ended, even a past live stream's file: create_transcription. Reading it while it runs: get_transcription.\nArguments: streamUrl must be live when called; the same streamUrl on the same broadcast reuses its stream. Without streamUrl (and without broadcastId) it only sets up a new broadcast, off air and free: its link can be shared and configured with update_broadcast before the event. broadcastId (from list_broadcasts) reruns an existing broadcast on its old link, and then name is ignored; without it a new broadcast is made, named name or the stream's host. spokenLanguage is a code like en (omit to detect). spokenTranslations true adds audio of each translation.\nList price: $0.60 an hour while it runs, billed per second; Pay as you go bills at least 5 minutes per transcription. Listeners and translations are free.\nTranscriptions running at once per account: 5 on Pay as you go, 50 on Premium; past that a start is refused with quota_exceeded.\nBehaviour: every call with streamUrl starts a new billed run (set up only: free, nothing runs), and without broadcastId a new broadcast with a new link; a retry with the same idempotencyKey within 24 h returns the first run (replayed true) instead. VocalStack's servers pull the stream as a visitor who is not signed in; nothing is posted to or changed at the source. Listeners on the link see each line within seconds of it being said, translated into the language they pick, with no account; the text is kept as a transcription. A run lasts until stop_broadcast or the stream ends, and billing stops at that moment.\nReturns: broadcastId, name, link (anyone who opens it reads, or with spokenTranslations also hears, the stream in their language), transcriptionId, state; set up only: broadcastId, name, link, onAir false.\nErrors: invalid_state (with link) when already on air, invalid_options for a non-http(s) address or broadcastId without streamUrl, insufficient_credit (with topUpUrl), quota_exceeded, not_found for an unknown broadcastId, forbidden for a key without the write and recordings:publish scopes.",
+      "description": "Start live transcription and translation of a stream playing now, on a public link listeners open in their own language; or set up a broadcast and its link ahead of the event.\nUse: a stream playing now, with listeners following live, or a broadcast to set up and share before the event. A recording that has ended, even a past live stream's file: create_transcription. Reading it while it runs: get_transcription.\nArguments: streamUrl must be live when called; the same streamUrl on the same broadcast reuses its stream. Without streamUrl (and without broadcastId) it only sets up a new broadcast, off air and free: its link can be shared and configured with update_broadcast before the event. broadcastId (from list_broadcasts) reruns an existing broadcast on its old link, and then name is ignored; without it a new broadcast is made, named name or the stream's host. spokenLanguage is a code like en (omit to detect). spokenTranslations true adds audio of each translation.\nList price: $0.60 an hour while it runs, billed per second; Pay as you go bills at least 5 minutes per transcription. Listeners and translations are free.\nTranscriptions running at once per account: 5 on Pay as you go, 50 on Premium; past that a start is refused with quota_exceeded.\nBehaviour: every call with streamUrl starts a new billed run (set up only: free, nothing runs), and without broadcastId a new broadcast with a new link; a retry with the same idempotencyKey within 24 h returns the first run (replayed true) instead. VocalStack's servers pull the stream as a visitor who is not signed in; nothing is posted to or changed at the source. Listeners on the link see each line within seconds of it being said, translated into the language they pick, with no account; the text is kept as a transcription. A run lasts until stop_broadcast or the stream ends, and billing stops at that moment.\nReturns: broadcastId, name, link (anyone who opens it reads, or with spokenTranslations also hears, the stream in their language), transcriptionId, state; set up only: broadcastId, name, link, onAir false.\nErrors: invalid_state (with link) when already on air, invalid_options for a non-http(s) address or broadcastId without streamUrl, insufficient_credit (with topUpUrl), quota_exceeded, terms_acceptance_required (with acceptUrl for the person to accept the Terms once), not_found for an unknown broadcastId, forbidden for a key without the write and recordings:publish scopes.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -611,7 +616,8 @@
             "enum": [
               "public",
               "private"
-            ]
+            ],
+            "type": "string"
           },
           "broadcastId": {
             "description": "A broadcastId from list_broadcasts or start_broadcast.",
@@ -737,7 +743,7 @@
     {
       "name": "get_account",
       "title": "Check credit and usage",
-      "description": "Check the account's credit and usage: the balance left, the plan, whether a new file or live transcription would start now (and what would refuse it), and this period's limits.\nUse: before a long or live transcription, after an insufficient_credit or quota_exceeded error, or to tell the user what they have left. Prices per minute are in create_transcription and start_broadcast; adding credit happens at topUpUrl, in a browser.\nArguments: none.\nBehaviour: free and read-only; nothing is cached, each call reads the account as it is at that moment, including a live run still being billed. Calling it changes nothing and spends nothing. Gives rate_limited (with retryAfterS) past 600 calls a minute per API key.\nReturns: billingEnabled; plan (id, name, kind) or null; balance in US dollars (negative while a plan lets a running transcription continue below zero); canStart and startBlock (no_credit or hourly_limit, null when it starts) for a file; canStartLive and startBlockLive (also concurrency) for a live one; running, concurrentLimit, createdLastHour and createLimit (null means unlimited); period (start, end); monthlyCredit when a plan grants one; usageCap (amount, period, used, resetsAt) when this API key has a spending cap; topUpUrl.\nErrors: rate_limited (with retryAfterS); forbidden for a token without the read scope.",
+      "description": "Check the account's credit and usage: the balance left, the plan, whether a new file or live transcription would start now (and what would refuse it), and this period's limits.\nUse: before a long or live transcription, after an insufficient_credit or quota_exceeded error, or to tell the user what they have left. Prices per minute are in create_transcription and start_broadcast; adding credit happens at topUpUrl, in a browser.\nArguments: none.\nBehaviour: free and read-only; nothing is cached, each call reads the account as it is at that moment, including a live run still being billed. Calling it changes nothing and spends nothing. Gives rate_limited (with retryAfterS) past 600 calls a minute per API key.\nReturns: billingEnabled; plan (id, name, kind) or null; balance in US dollars (negative while a plan lets a running transcription continue below zero); canStart and startBlock (no_credit or hourly_limit, null when it starts) for a file; canStartLive and startBlockLive (also concurrency) for a live one; running, concurrentLimit, createdLastHour and createLimit (null means unlimited); period (start, end); monthlyCredit when a plan grants one; usageCap (amount, period, used, resetsAt) when this API key has a spending cap; topUpUrl; for a signed-in person termsAccepted, and while false acceptUrl: a page where they accept the Terms of Service and Privacy Policy themselves, once, before their first transcription.\nErrors: rate_limited (with retryAfterS); forbidden for a token without the read scope.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {},

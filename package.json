@@ -1,6 +1,6 @@
 {
   "name": "@vocalstack/mcp",
-  "version": "1.5.3",
+  "version": "1.5.4",
   "description": "VocalStack's MCP server: transcribe, translate, search and summarize audio and video, and run live broadcasts, from any MCP client, on VocalStack's public API.",
   "license": "MIT",
   "type": "module",
