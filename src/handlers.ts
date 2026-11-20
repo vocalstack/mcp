@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Api } from "./api.js";
 import type { Args } from "./args.js";
 import { ToolError, bad } from "./errors.js";
@@ -475,12 +475,23 @@ async function translatedLines(ctx: Context, id: string, snap: Json, t: Json, la
   return lines;
 }
 
+async function exportFile(ctx: Context, id: string, format: string, lang: string | undefined): Promise<Json> {
+  const r = await ctx.api.request<string>("GET", path("/v1/transcriptions/", id, "/export"), { query: { format, lang }, raw: true, signal: ctx.signal });
+  const disposition = r.headers.get("content-disposition") ?? "";
+  const star = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
+  const plain = /filename="([^"]*)"/i.exec(disposition);
+  const fileName = star ? decodeURIComponent(star[1]) : plain ? plain[1] : `transcript.${format}`;
+  return { fileName, contentType: (r.headers.get("content-type") ?? "text/plain").split(";")[0].trim(), content: r.data };
+}
+
 async function getTranscription(a: Args, ctx: Context): Promise<Json> {
   const id = a.id("transcriptionId");
   const waitS = a.int("waitS", 0, 0, WAIT_MAX_S);
-  const format = a.oneOf("format", ["text", "segments", "summary", "none"], "text");
+  const format = a.oneOf("format", ["text", "segments", "summary", "srt", "vtt", "markdown", "none"], "text");
   const lang = await targetLang(a, ctx, "lang");
   const words = a.bool("includeWords");
+  const fileFormat = ({ srt: "srt", vtt: "vtt", markdown: "md" } as Record<string, string>)[format];
+  if (fileFormat && words) throw bad("`includeWords` goes with format segments");
   if (words && lang !== undefined) throw bad("`includeWords` is for the original language; leave it out with `lang`");
   const offset = a.int("offset", 0, 0, 4294967295);
   const limit = a.int("limit", 500, 1, 2000);
@@ -517,15 +528,21 @@ async function getTranscription(a: Args, ctx: Context): Promise<Json> {
       if (timedOut === true) return out;
       throw new ToolError("invalid_state", notYet);
     }
-    const snap = await snapshot(ctx, id);
     const spoken: string | undefined = t.spokenLanguage ?? undefined;
     const same = spoken !== undefined && family(spoken) === family(lang);
+    if (fileFormat) return { ...out, file: await exportFile(ctx, id, fileFormat, same ? undefined : lang), lang, translated: !same };
+    const snap = await snapshot(ctx, id);
     const lines = same ? segmentLines(snap, t) : await translatedLines(ctx, id, snap, t, lang, offset, limit);
     return { ...out, ...page(lines, format, false, offset, limit), lang, translated: !same };
   }
+  const partial = t.job ? !TERMINAL.has(t.job.state) : t.state !== "finalized";
+  if (fileFormat) {
+    out.file = await exportFile(ctx, id, fileFormat, undefined);
+    if (partial) out.partial = true;
+    return out;
+  }
   const snap = await snapshot(ctx, id);
   Object.assign(out, page(segmentLines(snap, t), format, words, offset, limit));
-  const partial = t.job ? !TERMINAL.has(t.job.state) : t.state !== "finalized";
   if (partial) out.partial = true;
   return out;
 }
@@ -1050,16 +1067,17 @@ async function updateBroadcast(a: Args, ctx: Context): Promise<Json> {
   const id = a.id("broadcastId");
   const name = a.str("name");
   const access = a.raw.access === undefined || a.raw.access === null ? undefined : a.oneOf("access", ["public", "private"], "public");
-  const password = a.str("password");
+  const newCode = optBool(a, "newListenerCode");
+  if (newCode === false) throw bad("`newListenerCode` takes only true (make a new code); leave it out to keep the current one");
   const spokenRaw = a.str("spokenLanguage");
   const speak = optBool(a, "spokenTranslations");
   const cloned = optBool(a, "clonedVoices");
   const consent = a.bool("consent");
   const restore = optBool(a, "restore");
   if (restore === false) throw bad("`restore` takes only true (bring it back from the trash); delete_broadcast moves it there");
-  const changes = [name, access, password, spokenRaw, speak, cloned].some((v) => v !== undefined);
+  const changes = [name, access, newCode, spokenRaw, speak, cloned].some((v) => v !== undefined);
   if (!changes && restore === undefined) {
-    throw bad("give at least one of `name`, `access`, `password`, `spokenLanguage`, `spokenTranslations`, `clonedVoices` or `restore` to change");
+    throw bad("give at least one of `name`, `access`, `newListenerCode`, `spokenLanguage`, `spokenTranslations`, `clonedVoices` or `restore` to change");
   }
   if (cloned === true && !consent) throw bad(NEEDS_CONSENT);
   let b: Json = await broadcast(ctx, id);
@@ -1068,7 +1086,14 @@ async function updateBroadcast(a: Args, ctx: Context): Promise<Json> {
   const body: Json = {};
   if (name !== undefined) body.name = name;
   if (access !== undefined) body.access = access;
-  if (password !== undefined && access !== "public") body.password = password;
+  const privateAfter = access === undefined ? b.access === "private" : access === "private";
+  if (newCode === true && !privateAfter) throw bad('`newListenerCode` is for a private broadcast; make it private with access: "private" (that makes a code too)');
+  const fresh = () => {
+    const u = randomUUID().replace(/-/g, "");
+    return `${u.slice(0, 4)}-${u.slice(4, 8)}`;
+  };
+  let made: string | undefined = newCode === true ? fresh() : undefined;
+  if (made !== undefined) body.password = made;
   const settings: Json = {};
   if (spokenRaw !== undefined) {
     const l = spokenRaw.trim().toLowerCase();
@@ -1081,18 +1106,23 @@ async function updateBroadcast(a: Args, ctx: Context): Promise<Json> {
   }
   if (Object.keys(settings).length) body.settings = settings;
   if (changes) try {
-    b = (await ctx.api.request("PATCH", path("/v1/broadcasts/", id), { json: body, signal: ctx.signal })).data;
+    try {
+      b = (await ctx.api.request("PATCH", path("/v1/broadcasts/", id), { json: body, signal: ctx.signal })).data;
+    } catch (e) {
+      if (!(e instanceof ToolError && /needs? a password/.test(e.message))) throw e;
+      made = fresh();
+      body.password = made;
+      b = (await ctx.api.request("PATCH", path("/v1/broadcasts/", id), { json: body, signal: ctx.signal })).data;
+    }
   } catch (e) {
     if (e instanceof ToolError && e.code === "invalid_state") {
       throw new ToolError("invalid_state", "This broadcast is in the trash; pass restore: true to bring it back.");
-    }
-    if (e instanceof ToolError && e.message === "private broadcasts need a password") {
-      throw bad("A private broadcast needs a `password` (at least 4 characters) the first time.");
     }
     consentError(e);
   }
   return {
     ...brief(b),
+    ...(made !== undefined ? { listenerCode: made } : {}),
     spokenLanguage: b.settings?.spokenLanguage ?? "auto",
     spokenTranslations: b.settings?.translationTts === true,
     clonedVoices: b.settings?.voiceCloning === true,
@@ -1104,6 +1134,24 @@ const ON_AIR = "This broadcast is already on air; stop it first (stop_broadcast)
 
 async function startBroadcast(a: Args, ctx: Context): Promise<Json> {
   const key = idempotencyKey(a);
+  if (a.raw.streamUrl === undefined || a.raw.streamUrl === null) {
+    if (a.raw.broadcastId !== undefined && a.raw.broadcastId !== null) {
+      throw bad("`streamUrl` is required with `broadcastId`: it is what goes on air (update_broadcast changes the broadcast's settings)");
+    }
+    if (present(a, "spokenLanguage") || present(a, "spokenTranslations")) {
+      throw bad("`spokenLanguage` and `spokenTranslations` go with `streamUrl`; to set them ahead, use update_broadcast on the new broadcast");
+    }
+    const name = a.str("name")?.trim() || "Live stream";
+    const made = await ctx.api.request("POST", "/v1/broadcasts", { json: { name }, idempotencyKey: key && stepKey(key, "broadcast"), signal: ctx.signal });
+    const b = made.data;
+    return {
+      broadcastId: b.id,
+      name: b.name,
+      link: b.shareUrl,
+      onAir: false,
+      message: "Set up, off air and not billed. Share the link now; set access (private returns a listener code), the language or spoken translations with update_broadcast; go on air with start_broadcast with this broadcastId and the streamUrl.",
+    };
+  }
   const url = streamUrl(a);
   const spoken = a.str("spokenLanguage")?.toLowerCase();
   const speak = a.bool("spokenTranslations");

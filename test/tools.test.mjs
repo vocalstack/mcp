@@ -162,7 +162,7 @@ test("arguments are held to the schema, worded as the hosted server words them",
   r = await call(client, "get_transcription", { transcriptionId: TID, limit: 0 });
   assert.equal(r.content[0].text, "`limit` must be an integer from 1 to 2000");
   r = await call(client, "get_transcription", { transcriptionId: TID, format: "pdf" });
-  assert.equal(r.content[0].text, "`format` must be one of text, segments, summary, none");
+  assert.equal(r.content[0].text, "`format` must be one of text, segments, summary, srt, vtt, markdown, none");
   r = await call(client, "get_transcription", { transcriptionId: TID, waitS: 61 });
   assert.equal(r.content[0].text, "`waitS` must be an integer from 0 to 60");
   r = await call(client, "get_transcription", { transcriptionId: TID, waitS: -1 });
@@ -319,6 +319,24 @@ test("a 10 MiB file goes through stdio and up in one request", async () => {
   const [post] = only("POST", "/v1/transcriptions");
   assert.equal(post.body.file.bytes.length, bytes.length);
   assert.equal(post.body.file.type, "application/octet-stream");
+});
+
+test("get_transcription format srt, vtt or markdown returns the export as a file, in lang too", async () => {
+  fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx({ job: job("done") }) });
+  fake.on("GET", `/v1/transcriptions/${TID}/share-links`, { body: { links: [] } });
+  const srt = "1\n00:00:00,000 --> 00:00:02,000\nSpeaker 1: Hello.\n";
+  fake.on("GET", `/v1/transcriptions/${TID}/export`, {
+    text: srt,
+    headers: { "content-type": "application/x-subrip; charset=utf-8", "content-disposition": "attachment; filename=\"Call.srt\"; filename*=UTF-8''Call.srt" },
+  });
+  let r = await call(client, "get_transcription", { transcriptionId: TID, format: "srt" });
+  assert.equal(r.isError, undefined, r.content[0].text);
+  assert.deepEqual(r.structuredContent.file, { fileName: "Call.srt", contentType: "application/x-subrip", content: srt });
+  const ask = only("GET", `/v1/transcriptions/${TID}/export`)[0];
+  assert.equal(ask.query.format, "srt");
+  assert.equal(ask.query.lang, undefined);
+  r = await call(client, "get_transcription", { transcriptionId: TID, format: "srt", includeWords: true });
+  assert.equal(r.structuredContent.error, "invalid_options");
 });
 
 test("get_transcription pages readable text with speakers and marks a running one partial", async () => {
@@ -1421,8 +1439,9 @@ test("update_transcription and update_broadcast restore true bring one back from
   assert.equal(r.content[0].text, "This broadcast is in the trash; pass restore: true to bring it back.");
 });
 
-test("update_broadcast patches name, access, password and settings, and reports them", async () => {
+test("update_broadcast patches name, access and settings; going private makes a listener code, returned once", async () => {
   fake.on("GET", `/v1/broadcasts/${BID}`, { body: bcast() });
+  fake.on("PATCH", `/v1/broadcasts/${BID}`, apiError(400, "invalid_options", "private broadcasts need a password"));
   fake.on("PATCH", `/v1/broadcasts/${BID}`, {
     body: bcast({ name: "Town hall", access: "private", settings: { spokenLanguage: "es", translationTts: true, voiceCloning: true } }),
   });
@@ -1430,19 +1449,17 @@ test("update_broadcast patches name, access, password and settings, and reports 
     broadcastId: BID,
     name: "Town hall",
     access: "private",
-    password: "choir2026",
     spokenLanguage: "ES",
     spokenTranslations: true,
     clonedVoices: true,
     consent: true,
   });
   assert.equal(r.isError, undefined, r.content[0].text);
-  assert.deepEqual(only("PATCH", `/v1/broadcasts/${BID}`)[0].body, {
-    name: "Town hall",
-    access: "private",
-    password: "choir2026",
-    settings: { spokenLanguage: "es", translationTts: true, voiceCloning: true, voiceCloningConsent: true },
-  });
+  const patches = only("PATCH", `/v1/broadcasts/${BID}`);
+  assert.equal(patches.length, 2);
+  assert.equal(patches[0].body.password, undefined);
+  assert.match(patches[1].body.password, /^[0-9a-f]{4}-[0-9a-f]{4}$/);
+  assert.equal(r.structuredContent.listenerCode, patches[1].body.password);
   assert.equal(r.structuredContent.access, "private");
   assert.equal(r.structuredContent.spokenLanguage, "es");
   assert.equal(r.structuredContent.spokenTranslations, true);
@@ -1450,14 +1467,12 @@ test("update_broadcast patches name, access, password and settings, and reports 
   fake.reset();
   fake.on("GET", `/v1/broadcasts/${BID}`, { body: bcast() });
   fake.on("PATCH", `/v1/broadcasts/${BID}`, { body: bcast() });
-  r = await call(client, "update_broadcast", { broadcastId: BID, access: "public", password: "x", spokenLanguage: "auto" });
+  r = await call(client, "update_broadcast", { broadcastId: BID, access: "public", spokenLanguage: "auto" });
   assert.deepEqual(only("PATCH", `/v1/broadcasts/${BID}`)[0].body, { access: "public", settings: { spokenLanguage: null } });
   assert.equal(r.structuredContent.spokenLanguage, "auto");
-  fake.reset();
-  fake.on("GET", `/v1/broadcasts/${BID}`, { body: bcast() });
-  fake.on("PATCH", `/v1/broadcasts/${BID}`, apiError(400, "invalid_options", "private broadcasts need a password"));
-  r = await call(client, "update_broadcast", { broadcastId: BID, access: "private" });
-  assert.equal(r.content[0].text, "A private broadcast needs a `password` (at least 4 characters) the first time.");
+  assert.equal(r.structuredContent.listenerCode, undefined);
+  r = await call(client, "update_broadcast", { broadcastId: BID, newListenerCode: true });
+  assert.match(r.content[0].text, /is for a private broadcast/);
   fake.reset();
   r = await call(client, "update_broadcast", { broadcastId: BID });
   assert.match(r.content[0].text, /^give at least one of/);

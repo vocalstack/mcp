@@ -111,7 +111,7 @@ export class FakeApi {
       return;
     }
     res.writeHead(status, { "content-type": "application/json", ...(out.headers ?? {}) });
-    res.end(JSON.stringify(out.body ?? {}));
+    res.end(out.text !== undefined ? out.text : JSON.stringify(out.body ?? {}));
   }
 }
 

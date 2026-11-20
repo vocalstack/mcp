@@ -62,7 +62,7 @@ Both offer the same tools.
 
 <!-- tools -->
 - `create_transcription`: Start transcribing a finished recording, from a public link or a file sent inline; returns a transcriptionId at once, before any text.
-- `get_transcription`: Read one transcription's status and text, with timestamps and speakers, or its title and summary: as spoken or translated, at once or after waiting for it to finish.
+- `get_transcription`: Read or export one transcription: its status and text with timestamps and speakers, its title and summary, or the whole transcript as an SRT, WebVTT or Markdown file; as spoken or translated, at once or after waiting for it to finish.
 - `list_transcriptions`: List this account's transcriptions, newest first, a page at a time: files, links and live ones, including those broadcasts recorded.
 - `search_transcriptions`: Find what was said across this account's transcriptions, or in one: the lines with given words or a name (mode words), or the passages that answer a question (mode meaning).
 - `update_transcription`: Change a transcription: its name, its public share link, its summary, whether spoken translations use the speakers' own cloned voices, or bring it back from the trash.
@@ -71,8 +71,8 @@ Both offer the same tools.
 - `update_speaker`: Name or save a speaker: name one person in one transcription (instead of "Speaker N") and optionally save them so later transcriptions recognise them, or rename a saved speaker and switch their cloned voice on or off, everywhere they are recognised.
 - `delete_speaker`: Delete a saved speaker for good: their name, fingerprint, stored sample and any cloned voice are erased at once and cannot be restored.
 - `list_broadcasts`: List this account's broadcasts, or get one in detail.
-- `start_broadcast`: Start live transcription and translation of a stream playing now, on a public link listeners open in their own language.
-- `update_broadcast`: Change a broadcast's settings: its name, who can listen (public, or private with a password), the language spoken, and whether translations are read aloud, in stock or the speakers' own cloned voices; or bring it back from the trash.
+- `start_broadcast`: Start live transcription and translation of a stream playing now, on a public link listeners open in their own language; or set up a broadcast and its link ahead of the event.
+- `update_broadcast`: Change a broadcast's settings: its name, who can listen (public, or private behind a listener code VocalStack makes), the language spoken, and whether translations are read aloud, in stock or the speakers' own cloned voices; or bring it back from the trash.
 - `stop_broadcast`: Stop the live transcription a broadcast is running, which also stops its billing.
 - `delete_broadcast`: Move a broadcast to the trash: its public link and stream addresses stop working for listeners.
 - `get_account`: Check the account's credit and usage: the balance left, the plan, whether a new file or live transcription would start now (and what would refuse it), and this period's limits.

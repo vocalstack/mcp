@@ -9,6 +9,7 @@ export interface RequestOptions {
   idempotencyKey?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  raw?: boolean;
 }
 
 export interface Response<T> {
@@ -110,7 +111,7 @@ export class Api {
       const retryable = typeof parsed?.data?.retryable === "boolean" ? parsed.data.retryable : undefined;
       throw new ToolError(code, message, details, res.status, retryable);
     }
-    return { data: parsed as T, headers: res.headers };
+    return { data: (opts.raw ? text : parsed) as T, headers: res.headers };
   }
 
   get<T = any>(path: string, query?: Query, signal?: AbortSignal): Promise<T> {
