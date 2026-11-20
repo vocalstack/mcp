@@ -68,10 +68,10 @@ Both offer the same tools.
 - `update_transcription`: Change a transcription: its name, its public share link, its summary, whether spoken translations use the speakers' own cloned voices, or bring it back from the trash.
 - `delete_transcription`: Move a transcription to the trash, with its recordings, transcript, translations and summary; its share links stop working.
 - `list_speakers`: List the speakers this account has saved: people recognised by name in every new transcription.
-- `update_speaker`: Name or save a speaker: name one person in one transcription (instead of "Speaker N") and optionally save them so later transcriptions recognise them, or rename a saved speaker and switch their cloned voice on or off, everywhere they are recognised.
+- `update_speaker`: Name or save a speaker, with two kinds of target: a person in one transcription (transcriptionId + speaker number: name them instead of "Speaker N", and with save true create a saved speaker so later transcriptions recognise them; this is the create-a-speaker tool, there is no separate one), or a saved speaker (speakerId: rename, switch their cloned voice on or off, everywhere they are recognised).
 - `delete_speaker`: Delete a saved speaker for good: their name, fingerprint, stored sample and any cloned voice are erased at once and cannot be restored.
-- `list_broadcasts`: List this account's broadcasts, or get one in detail.
-- `start_broadcast`: Start live transcription and translation of a stream playing now, on a public link listeners open in their own language; or set up a broadcast and its link ahead of the event.
+- `list_broadcasts`: List this account's broadcasts, or get one broadcast in detail by its broadcastId (this is the get-a-broadcast tool; there is no separate one).
+- `start_broadcast`: Start a broadcast: live transcription and translation of a stream playing now, on a public link listeners open in their own language.
 - `update_broadcast`: Change a broadcast's settings: its name, who can listen (public, or private behind a listener code VocalStack makes), the language spoken, and whether translations are read aloud, in stock or the speakers' own cloned voices; or bring it back from the trash.
 - `stop_broadcast`: Stop the live transcription a broadcast is running, which also stops its billing.
 - `delete_broadcast`: Move a broadcast to the trash: its public link and stream addresses stop working for listeners.
