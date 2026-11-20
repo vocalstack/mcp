@@ -696,13 +696,9 @@ function noSpeaker(number: number): ToolError {
   return new ToolError("not_found", `This transcription has no Speaker ${number} who has spoken; get_transcription shows the speaker numbers.`);
 }
 
-async function saveSpeaker(a: Args, ctx: Context): Promise<Json> {
-  const id = a.id("transcriptionId");
-  const number = a.int("speaker", 1, 1, 1000);
-  const name = a.reqStr("name");
-  if ([...name].length > 60) throw bad("`name` must be 1 to 60 characters");
-  const consent = a.bool("consent");
-  await transcription(ctx, id);
+async function saveSpeaker(ctx: Context, id: string, number: number, name: string, consent: boolean): Promise<Json> {
+  const n = [...name].length;
+  if (n === 0 || n > 60) throw bad("with `save`, `name` must be 1 to 60 characters");
   const snap = await snapshot(ctx, id);
   const spoken = spokenSegments(snap).filter((l) => l.speaker >= 0);
   const numbers = numbering(spoken, snap);
@@ -712,6 +708,18 @@ async function saveSpeaker(a: Args, ctx: Context): Promise<Json> {
     .map(([idx]) => idx)
     .sort((x, y) => x - y)[0];
   if (appearance === undefined) throw noSpeaker(number);
+  const known = (await all(ctx, "/v1/speakers", "speakers")).find(
+    (s) => s.transcriptionId === id && s.consent !== "refused" && !s.draft && s.library !== false && typeof s.name === "string" && s.name.toLowerCase() === name.toLowerCase(),
+  );
+  if (known) {
+    let s = known;
+    if (consent && s.consent !== "granted") {
+      s = (await ctx.api.request("POST", path("/v1/speakers/", s.id, "/consent"), { json: { consent: "granted" }, signal: ctx.signal })).data;
+    }
+    const out: Json = { speakerId: s.id, saved: false, consent: s.consent, cloned: s.voice != null };
+    if (s.voice) put(out, "voiceState", s.voice.state);
+    return out;
+  }
   let s: Json;
   try {
     s = (
@@ -724,8 +732,30 @@ async function saveSpeaker(a: Args, ctx: Context): Promise<Json> {
     if (e instanceof ToolError && e.code === "not_found" && e.message.includes("has not said anything")) throw noSpeaker(number);
     throw e;
   }
-  const out: Json = { speakerId: s.id, name: s.name, consent: s.consent, cloned: s.voice != null };
+  const out: Json = { speakerId: s.id, saved: true, consent: s.consent, cloned: s.voice != null };
   if (s.voice) put(out, "voiceState", s.voice.state);
+  return out;
+}
+
+async function getAccount(_a: Args, ctx: Context): Promise<Json> {
+  const b = await ctx.api.get("/v1/billing", {}, ctx.signal);
+  const l = b.limitsUsage ?? {};
+  const out: Json = {
+    billingEnabled: b.enabled ?? null,
+    plan: b.plan ?? null,
+    balance: b.balance ?? null,
+    canStart: b.canStart ?? null,
+    startBlock: b.startBlock ?? null,
+    canStartLive: b.canStartLive ?? null,
+    startBlockLive: b.startBlockLive ?? null,
+    running: l.running ?? null,
+    concurrentLimit: l.concurrentLimit ?? null,
+    createdLastHour: l.createdLastHour ?? null,
+    createLimit: l.createLimit ?? null,
+    period: b.period ?? null,
+    topUpUrl: b.topUpUrl ?? null,
+  };
+  put(out, "monthlyCredit", b.monthlyCredit);
   return out;
 }
 
@@ -863,6 +893,7 @@ async function patchSpeaker(ctx: Context, id: string, body: Json): Promise<void>
 
 async function updateSavedSpeaker(a: Args, ctx: Context): Promise<Json> {
   const id = a.id("speakerId");
+  if (present(a, "save")) throw bad("`save` is for a speaker in one transcription (transcriptionId with speaker); this one is already saved");
   let name: string | undefined;
   const given = a.raw.name;
   if (given !== undefined && given !== null) {
@@ -898,7 +929,7 @@ async function updateSavedSpeaker(a: Args, ctx: Context): Promise<Json> {
   if (cloned === true && cur.consent === "refused") {
     throw new ToolError(
       "invalid_state",
-      "This speaker refused to be cloned and their audio was deleted; save them again from a transcription (save_speaker with consent) to clone them.",
+      "This speaker refused to be cloned and their audio was deleted; save them again from a transcription (update_speaker with save and consent) to clone them.",
     );
   }
   if (name !== undefined) await patchSpeaker(ctx, id, { name });
@@ -910,7 +941,7 @@ async function updateSavedSpeaker(a: Args, ctx: Context): Promise<Json> {
       if (e instanceof ToolError && e.code === "invalid_state" && e.message.includes("no sample stored")) {
         throw new ToolError(
           "invalid_state",
-          "This saved speaker has no stored sample to clone their voice from; save them again from a transcription (save_speaker with consent).",
+          "This saved speaker has no stored sample to clone their voice from; save them again from a transcription (update_speaker with save and consent).",
         );
       }
       noSavedSpeaker(e);
@@ -927,13 +958,20 @@ async function updateSpeaker(a: Args, ctx: Context): Promise<Json> {
   if (present(a, "clonedVoice")) {
     throw bad("`clonedVoice` is for a saved speaker (speakerId); for everyone in one transcription use update_transcription with clonedVoices");
   }
+  const save = optBool(a, "save") ?? false;
+  const consent = a.bool("consent");
+  if (consent && !save) {
+    throw bad("`consent` with `transcriptionId` goes with `save: true` (saving and cloning this person); to clone a saved speaker use `speakerId` with `clonedVoice`");
+  }
   const id = a.id("transcriptionId");
   const number = a.int("speaker", 1, 1, 1000);
   const given = a.raw.name;
   if (given === undefined || given === null) throw bad('`name` is required with `transcriptionId` and `speaker` ("" clears the name)');
   if (typeof given !== "string") throw bad('`name` must be a string ("" clears the name)');
   const name = [...given.trim()].slice(0, 80).join("");
+  if (save && (name.length === 0 || [...given.trim()].length > 60)) throw bad("`name` must be 1 to 60 characters");
   await transcription(ctx, id);
+  if (save) return { transcriptionId: id, speaker: number, name, ...(await saveSpeaker(ctx, id, number, given.trim(), consent)) };
   try {
     await ctx.api.request("PUT", path("/v1/transcriptions/", id, "/appearances/", String(number)), {
       json: { name: name || null },
@@ -1169,7 +1207,6 @@ export const handlers: Record<string, Handler> = {
   update_transcription: updateTranscription,
   delete_transcription: deleteTranscription,
   list_speakers: speakers,
-  save_speaker: saveSpeaker,
   update_speaker: updateSpeaker,
   delete_speaker: deleteSpeaker,
   list_broadcasts: listBroadcasts,
@@ -1177,4 +1214,5 @@ export const handlers: Record<string, Handler> = {
   update_broadcast: updateBroadcast,
   stop_broadcast: stopBroadcast,
   delete_broadcast: deleteBroadcast,
+  get_account: getAccount,
 };
