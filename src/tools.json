@@ -1,5 +1,5 @@
 {
-  "instructions": "VocalStack transcribes and translates recorded or live audio and video in about 100 languages, with speaker labels.\nRecorded audio: create_transcription (a link or a file) returns a transcriptionId at once; get_transcription with waitS waits for it and reads the text, in any language with lang.\nFind: list_transcriptions (ids, newest first); search_transcriptions (mode words for words or names, meaning for a question).\nOne transcription: get_transcription with format summary for its title and summary; update_transcription (name, share link, summary, cloned voices); delete_transcription (to the trash; update_transcription with restore brings it back).\nLive streams: start_broadcast, then get_transcription while it runs, stop_broadcast to end it; list_broadcasts shows them; update_broadcast changes access, language and spoken translations; delete_broadcast removes one.\nPeople: list_speakers, update_speaker (names; save true remembers a person, their voice cloned only with their consent; a saved speaker's cloned voice), delete_speaker.\nCredit and usage: get_account (balance, plan, whether a new transcription would start, limits).\nOnly transcription is billed; everything else, and listening, is free. Retry a start with the same idempotencyKey.\nErrors are results with isError true: error, message, retryable, and retryAfterS or topUpUrl when they apply.",
+  "instructions": "VocalStack transcribes and translates recorded or live audio and video in about 100 languages, with speaker labels.\nRecorded audio: create_transcription (a link or a file) returns a transcriptionId at once; get_transcription with waitS waits for it and reads the text, in any language with lang.\nFind: list_transcriptions (ids, newest first); search_transcriptions (mode words for words or names, meaning for a question).\nOne transcription: get_transcription with format summary for its title and summary; update_transcription (name, share link, summary, cloned voices); delete_transcription (to the trash; update_transcription with restore brings it back).\nLive streams: start_broadcast (or set one up ahead), then get_transcription while it runs, update_broadcast with onAir false to end it; list_broadcasts and get_broadcast show them; update_broadcast also changes access, language and spoken translations; delete_broadcast removes one.\nPeople: list_speakers, update_speaker (names; save true remembers a person, their voice cloned only with their consent; a saved speaker's cloned voice), delete_speaker.\nCredit and usage: get_account (balance, plan, whether a new transcription would start, limits).\nOnly transcription is billed; everything else, and listening, is free. Retry a start with the same idempotencyKey.\nErrors are results with isError true: error, message, retryable, and retryAfterS or topUpUrl when they apply.",
   "tools": [
     {
       "name": "create_transcription",
@@ -367,7 +367,7 @@
     {
       "name": "delete_transcription",
       "title": "Delete a transcription",
-      "description": "Move a transcription to the trash, with its recordings, transcript, translations and summary; its share links stop working.\nUse: to remove one; undo with update_transcription restore true (list_transcriptions with lifecycle archived lists the trash). Saved speakers stay (delete_speaker). A broadcast itself: delete_broadcast.\nArguments: transcriptionId only: the transcriptionId field returned by create_transcription, list_transcriptions, search_transcriptions or start_broadcast, a 36-character UUID such as 0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a, upper or lower case. Not a name (look it up with search_transcriptions), not a broadcastId, speakerId or the code in a share link: those are not_found. Example: {transcriptionId: \"0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a\"}.\nBehaviour: free; a soft delete kept 30 days, then erased for good. At once its share links answer not found, voices reading its translations stop, and it leaves list_transcriptions and search_transcriptions; restoring brings back the same links. A file still being transcribed is stopped and keeps its text so far, billed only for that; restoring does not resume it. A live one must be stopped first (stop_broadcast). One already in the trash is left as it is, so a retry is safe.\nReturns: transcriptionId, name, deleted, deletedAt, restorableUntil.\nErrors: invalid_state while recording live or when locked; not_found; forbidden for a read-only key.",
+      "description": "Move a transcription to the trash, with its recordings, transcript, translations and summary; its share links stop working.\nUse: to remove one; undo with update_transcription restore true (list_transcriptions with lifecycle archived lists the trash). Saved speakers stay (delete_speaker). A broadcast itself: delete_broadcast.\nArguments: transcriptionId only: the transcriptionId field returned by create_transcription, list_transcriptions, search_transcriptions or start_broadcast, a 36-character UUID such as 0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a, upper or lower case. Not a name (look it up with search_transcriptions), not a broadcastId, speakerId or the code in a share link: those are not_found. Example: {transcriptionId: \"0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a\"}.\nBehaviour: free; a soft delete kept 30 days, then erased for good. At once its share links answer not found, voices reading its translations stop, and it leaves list_transcriptions and search_transcriptions; restoring brings back the same links. A file still being transcribed is stopped and keeps its text so far, billed only for that; restoring does not resume it. A live one must be stopped first (update_broadcast with onAir false on its broadcast). One already in the trash is left as it is, so a retry is safe.\nReturns: transcriptionId, name, deleted, deletedAt, restorableUntil.\nErrors: invalid_state while recording live or when locked; not_found; forbidden for a read-only key.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -506,19 +506,11 @@
     },
     {
       "name": "list_broadcasts",
-      "title": "List or get broadcasts",
-      "description": "List this account's broadcasts, or get one broadcast in detail by its broadcastId (this is the get-a-broadcast tool; there is no separate one). A broadcast is a public link where listeners follow a live transcription in their own language.\nUse: to find a broadcastId for start_broadcast, stop_broadcast or delete_broadcast, see which are on air, or (with broadcastId) a broadcast's recorded transcriptions and streams. Text: get_transcription; they also appear in list_transcriptions.\nBehaviour: free; most recently updated first, up to 500 per lifecycle, no paging; rate_limited (with retryAfterS) past 600 calls a minute per API key.\nReturns: broadcasts (broadcastId, name, link, access, onAir, listenersNow, lastRecordedAt once it has recorded, archived for one in the trash; while on air transcriptionId, state, onAirSince). With broadcastId, one item that adds transcriptions (up to 20: transcriptionId, name, recording, lastRecordedAt) and streams (name, url). None: an empty list.\nErrors: not_found for an unknown broadcastId.",
+      "title": "List broadcasts",
+      "description": "List this account's broadcasts with their status. A broadcast is a public link where listeners follow a live transcription in their own language.\nUse: to find a broadcastId, or see which are on air. One broadcast's recorded transcriptions and streams: get_broadcast. Their text: get_transcription; they also appear in list_transcriptions.\nBehaviour: free; most recently updated first, up to 500 per lifecycle, no paging; rate_limited (with retryAfterS) past 600 calls a minute per API key.\nReturns: broadcasts (broadcastId, name, link, access, onAir, listenersNow, lastRecordedAt once it has recorded, archived for one in the trash; while on air transcriptionId, state, onAirSince). None: an empty list.\nErrors: invalid_options for an unknown lifecycle.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
-          "broadcastId": {
-            "description": "Optional: return only this broadcast, in detail (its recorded transcriptions and stream addresses too). lifecycle is then ignored.",
-            "examples": [
-              "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a"
-            ],
-            "format": "uuid",
-            "type": "string"
-          },
           "lifecycle": {
             "default": "active",
             "description": "Which broadcasts: active those in use, archived those in the trash, all both.",
@@ -533,7 +525,36 @@
         "type": "object"
       },
       "annotations": {
-        "title": "List or get broadcasts",
+        "title": "List broadcasts",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "get_broadcast",
+      "title": "Get a broadcast",
+      "description": "Get one broadcast in detail: its status, link and settings, the transcriptions it has recorded, and the streams it has used.\nUse: before a run to check its settings and link, during one to see listeners and the live transcriptionId, after to find what it recorded. All broadcasts: list_broadcasts. The text: get_transcription with a transcriptionId from here.\nArguments: broadcastId, from list_broadcasts or start_broadcast; one in the trash is returned too (archived true).\nBehaviour: free and read-only; listenersNow is counted at the moment of the call. Gives rate_limited (with retryAfterS) past 600 calls a minute per API key.\nReturns: broadcastId, name, link, access, onAir, listenersNow, lastRecordedAt; while on air transcriptionId, state, onAirSince; transcriptions (up to 20, newest first: transcriptionId, name, recording, lastRecordedAt) and streams (name, url).\nErrors: not_found for an unknown broadcastId (or one erased after the restore window).",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "broadcastId": {
+            "description": "A broadcastId from list_broadcasts or start_broadcast, active or in the trash.",
+            "examples": [
+              "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a"
+            ],
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "broadcastId"
+        ],
+        "type": "object"
+      },
+      "annotations": {
+        "title": "Get a broadcast",
         "readOnlyHint": true,
         "destructiveHint": false,
         "idempotentHint": true,
@@ -543,7 +564,7 @@
     {
       "name": "start_broadcast",
       "title": "Start a broadcast",
-      "description": "Start a broadcast: live transcription and translation of a stream playing now, on a public link listeners open in their own language. Also the tool that creates a broadcast (without a stream: set up ahead, off air).\nUse: when the event is live now, or beforehand to get the link to share. A recording that has ended, even a past live stream's file: create_transcription. Reading it while it runs: get_transcription.\nArguments: streamUrl must be live when called; the same streamUrl on the same broadcast reuses its stream. Without streamUrl (and without broadcastId) it only sets up a new broadcast, off air and free: its link can be shared and configured with update_broadcast before the event. broadcastId (from list_broadcasts) reruns an existing broadcast on its old link, and then name is ignored; without it a new broadcast is made, named name or the stream's host. spokenLanguage is a code like en (omit to detect). spokenTranslations true adds audio of each translation.\nList price: $0.60 an hour while it runs, billed per second; Pay as you go bills at least 5 minutes per transcription. Listeners and translations are free.\nTranscriptions running at once per account: 5 on Pay as you go, 50 on Premium; past that a start is refused with quota_exceeded.\nBehaviour: not idempotent, as annotated: every call with streamUrl starts a new billed run (set up only: free, nothing runs), and without broadcastId makes a new broadcast with a new link. To make a retry safe after a timeout, pass idempotencyKey: the same key and arguments within 24 h return the first run (replayed true) and bill nothing more. VocalStack's servers pull the stream as a visitor who is not signed in; nothing is posted to or changed at the source. Listeners on the link see each line within seconds of it being said, translated into the language they pick, with no account; the text is kept as a transcription. A run lasts until stop_broadcast or the stream ends, and billing stops at that moment.\nReturns: broadcastId, name, link (anyone who opens it reads, or with spokenTranslations also hears, the stream in their language), transcriptionId, state; set up only: broadcastId, name, link, onAir false.\nErrors: invalid_state (with link) when already on air, invalid_options for a non-http(s) address or broadcastId without streamUrl, insufficient_credit (with topUpUrl), quota_exceeded, terms_acceptance_required (with acceptUrl for the person to accept the Terms once), not_found for an unknown broadcastId, forbidden for a key without the write and recordings:publish scopes.",
+      "description": "Start a broadcast: live transcription and translation of a stream playing now, on a public link listeners open in their own language. Also the tool that creates a broadcast (without a stream: set up ahead, off air).\nUse: when the event is live now, or beforehand to get the link to share. A recording that has ended, even a past live stream's file: create_transcription. Reading it while it runs: get_transcription.\nArguments: streamUrl must be live when called; the same streamUrl on the same broadcast reuses its stream. Without streamUrl (and without broadcastId) it only sets up a new broadcast, off air and free: its link can be shared and configured with update_broadcast before the event. broadcastId (from list_broadcasts or get_broadcast) reruns an existing broadcast on its old link, and then name is ignored; without it a new broadcast is made, named name or the stream's host. spokenLanguage is a code like en (omit to detect). spokenTranslations true adds audio of each translation.\nList price: $0.60 an hour while it runs, billed per second; Pay as you go bills at least 5 minutes per transcription. Listeners and translations are free.\nTranscriptions running at once per account: 5 on Pay as you go, 50 on Premium; past that a start is refused with quota_exceeded.\nBehaviour: not idempotent, as annotated: every call with streamUrl starts a new billed run (set up only: free, nothing runs), and without broadcastId makes a new broadcast with a new link. To make a retry safe after a timeout, pass idempotencyKey: the same key and arguments within 24 h return the first run (replayed true) and bill nothing more. VocalStack's servers pull the stream as a visitor who is not signed in; nothing is posted to or changed at the source. Listeners on the link see each line within seconds of it being said, translated into the language they pick, with no account; the text is kept as a transcription. A run lasts until update_broadcast with onAir false or the stream ends, and billing stops at that moment.\nReturns: broadcastId, name, link (anyone who opens it reads, or with spokenTranslations also hears, the stream in their language), transcriptionId, state; set up only: broadcastId, name, link, onAir false.\nErrors: invalid_state (with link) when already on air, invalid_options for a non-http(s) address or broadcastId without streamUrl, insufficient_credit (with topUpUrl), quota_exceeded, terms_acceptance_required (with acceptUrl for the person to accept the Terms once), not_found for an unknown broadcastId, forbidden for a key without the write and recordings:publish scopes.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -607,7 +628,7 @@
     {
       "name": "update_broadcast",
       "title": "Update a broadcast",
-      "description": "Change a broadcast's settings: its name, who can listen (public, or private behind a listener code VocalStack makes), the language spoken, and whether translations are read aloud, in stock or the speakers' own cloned voices; or bring it back from the trash.\nUse: before or between runs; settings apply from the next start_broadcast, the name and access at once. Only the fields given change; give at least one. Starting it: start_broadcast; ending it: stop_broadcast; removing it: delete_broadcast.\nArguments: broadcastId (required); the rest are independent and optional, except that newListenerCode goes only with a private broadcast and clonedVoices only with spokenTranslations on, needing consent true. No code is ever passed in: VocalStack makes it, so it never sits in the model's arguments. restore true brings a deleted broadcast back first, then applies the rest. Examples: {broadcastId, access: \"private\"} (returns listenerCode); {broadcastId, newListenerCode: true}; {broadcastId, spokenTranslations: true, clonedVoices: true, consent: true}; {broadcastId, restore: true}.\nBehaviour: the link and broadcastId never change; no call here makes a new address (for one: delete_broadcast, then start_broadcast without broadcastId). Changing access or the listener code signs out every current listener at once, even on air: their page asks for the link again (and the code when private), and they miss the lines spoken until they are back; the transcript is kept. Making it public again lets anyone with the link in, with no sign-in. The name shows to listeners at once; language and voice settings never touch a run in progress. Two calls at once: the later one wins, field by field. A read-only key is refused before anything changes. restore works for 30 days after delete_broadcast; after that it is not_found. Gives rate_limited (with retryAfterS) past 600 calls a minute per API key.\nReturns: the broadcast (broadcastId, name, link, access, onAir, listenersNow) with spokenLanguage, spokenTranslations and clonedVoices, and restored with restore; listenerCode only on the call that made it (going private the first time, or newListenerCode), never again, so pass it on to the listeners then.\nErrors: invalid_options for nothing to change, a bad name, newListenerCode on a public broadcast, an unknown language, restore false, or clonedVoices true without consent; invalid_state for a broadcast in the trash without restore true; not_found for an unknown broadcastId; forbidden for a read-only key.",
+      "description": "Change a broadcast: end its live run (onAir false), or its settings: its name, who can listen (public, or private behind a listener code VocalStack makes), the language spoken, and whether translations are read aloud, in stock or the speakers' own cloned voices; or bring it back from the trash.\nUse: to end the event when it is over (onAir false), or before or between runs to change settings; settings apply from the next start_broadcast, the name and access at once. Only the fields given change; give at least one. Starting a run: start_broadcast; removing the broadcast and its link: delete_broadcast.\nArguments: broadcastId (required); the rest are independent and optional, except that newListenerCode goes only with a private broadcast and clonedVoices only with spokenTranslations on, needing consent true. No code is ever passed in: VocalStack makes it, so it never sits in the model's arguments. restore true brings a deleted broadcast back first, then applies the rest. Examples: {broadcastId, onAir: false} (ends the run); {broadcastId, access: \"private\"} (returns listenerCode); {broadcastId, newListenerCode: true}; {broadcastId, spokenTranslations: true, clonedVoices: true, consent: true}; {broadcastId, restore: true}.\nBehaviour: the link and broadcastId never change; no call here makes a new address (for one: delete_broadcast, then start_broadcast without broadcastId). Changing access or the listener code signs out every current listener at once, even on air: their page asks for the link again (and the code when private), and they miss the lines spoken until they are back; the transcript is kept. Making it public again lets anyone with the link in, with no sign-in. The name shows to listeners at once; language and voice settings never touch a run in progress. Ending a run (onAir false) is free: billing stops at that moment, listeners see the broadcast is over, and the transcript is kept (get_transcription reads it and its summary once done); asking again when already off air changes nothing. Two calls at once: the later one wins, field by field. A read-only key is refused before anything changes. restore works for 30 days after delete_broadcast; after that it is not_found. Gives rate_limited (with retryAfterS) past 600 calls a minute per API key.\nReturns: the broadcast (broadcastId, name, link, access, onAir, listenersNow) with spokenLanguage, spokenTranslations and clonedVoices; with onAir false, stopped: the ended run's status (transcriptionId, name, kind live, state finishing then done, startedAt, endedAt, durationS), null when it was not on air; restored with restore; listenerCode only on the call that made it (going private the first time, or newListenerCode), never again, so pass it on to the listeners then.\nErrors: invalid_options for nothing to change, onAir true, a bad name, newListenerCode on a public broadcast, an unknown language, restore false, or clonedVoices true without consent; invalid_state for a broadcast in the trash without restore true; not_found for an unknown broadcastId; forbidden for a key without the write and recordings:publish scopes.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -649,6 +670,10 @@
             "description": "true: VocalStack makes a new listener code for a private broadcast and returns it once as listenerCode, signing out every current listener (share the new one with them). The old code stops working at once. Not accepted with access public.",
             "type": "boolean"
           },
+          "onAir": {
+            "description": "false: end the live run now, which stops its billing; the transcript is kept and the link stays for the next start_broadcast. Already off air: nothing changes. true is not accepted: start_broadcast puts a broadcast on air.",
+            "type": "boolean"
+          },
           "restore": {
             "description": "true: bring it back from the trash (after delete_broadcast, within the restore window) with its link, settings and recorded transcriptions; other fields given apply after. false is not accepted.",
             "examples": [
@@ -683,38 +708,9 @@
       }
     },
     {
-      "name": "stop_broadcast",
-      "title": "Stop a broadcast",
-      "description": "Stop the live transcription a broadcast is running, which also stops its billing.\nUse: when the event is over. To remove the transcript afterwards: delete_transcription; the broadcast and its link: delete_broadcast.\nArguments: broadcastId of a broadcast on air: from start_broadcast's result, or list_broadcasts (onAir true); not the transcriptionId. A second call is refused with invalid_state and changes nothing, so a retry is safe.\nBehaviour: free. The transcript is kept (get_transcription reads it, and its summary, once state is done); the broadcastId and its link stay, ready for the next start_broadcast.\nReturns: the stopped transcription's status (transcriptionId, name, kind live, state finishing then done, startedAt, endedAt, durationS) with broadcastId and link.\nErrors: invalid_state when not on air, not_found for an unknown broadcastId, forbidden for a key without the recordings:publish scope.",
-      "inputSchema": {
-        "additionalProperties": false,
-        "properties": {
-          "broadcastId": {
-            "description": "A broadcastId from list_broadcasts or start_broadcast.",
-            "examples": [
-              "0190f0e0-7c1a-7d3e-9b2a-5f4e3d2c1b0a"
-            ],
-            "format": "uuid",
-            "type": "string"
-          }
-        },
-        "required": [
-          "broadcastId"
-        ],
-        "type": "object"
-      },
-      "annotations": {
-        "title": "Stop a broadcast",
-        "readOnlyHint": false,
-        "destructiveHint": false,
-        "idempotentHint": true,
-        "openWorldHint": false
-      }
-    },
-    {
       "name": "delete_broadcast",
       "title": "Delete a broadcast",
-      "description": "Move a broadcast to the trash: its public link and stream addresses stop working for listeners.\nUse: a broadcast that will not run again. For 30 days update_broadcast with restore true brings it back with the same link (list_broadcasts with lifecycle archived lists the trash); after that the broadcast is erased for good. Ending a live run: stop_broadcast.\nArguments: broadcastId, a 36-character UUID (8-4-4-4-12 hex digits) from list_broadcasts or start_broadcast; not a transcriptionId (delete_transcription removes its recordings) and not the short code in its link, both of which are not_found. One already in the trash is left as it is, so a retry is safe.\nBehaviour: free, and a soft delete: nothing is erased for 30 days. At once every connected listener is signed out and its link and stream addresses answer not found. A broadcast on air is refused: stop it first (stop_broadcast). The transcriptions it recorded are not deleted: while it is in the trash they leave list_transcriptions and search_transcriptions with it, get_transcription still reads them by id, and delete_transcription deletes one. Restoring brings back the same link and its transcriptions.\nReturns: broadcastId, name, deleted true, deletedAt, restorableUntil.\nErrors: invalid_state while on air; not_found for an unknown broadcastId; forbidden for a read-only key.",
+      "description": "Move a broadcast to the trash: its public link and stream addresses stop working for listeners.\nUse: a broadcast that will not run again. For 30 days update_broadcast with restore true brings it back with the same link (list_broadcasts with lifecycle archived lists the trash); after that the broadcast is erased for good. Ending a live run: update_broadcast with onAir false.\nArguments: broadcastId, a 36-character UUID (8-4-4-4-12 hex digits) from list_broadcasts or start_broadcast; not a transcriptionId (delete_transcription removes its recordings) and not the short code in its link, both of which are not_found. One already in the trash is left as it is, so a retry is safe.\nBehaviour: free, and a soft delete: nothing is erased for 30 days. At once every connected listener is signed out and its link and stream addresses answer not found. A broadcast on air is refused: end its run first (update_broadcast with onAir false). The transcriptions it recorded are not deleted: while it is in the trash they leave list_transcriptions and search_transcriptions with it, get_transcription still reads them by id, and delete_transcription deletes one. Restoring brings back the same link and its transcriptions.\nReturns: broadcastId, name, deleted true, deletedAt, restorableUntil.\nErrors: invalid_state while on air; not_found for an unknown broadcastId; forbidden for a read-only key.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {

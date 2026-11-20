@@ -122,9 +122,9 @@ test("tools/list is exactly the hosted definitions: fifteen tools", async () => 
       "update_speaker",
       "delete_speaker",
       "list_broadcasts",
+      "get_broadcast",
       "start_broadcast",
       "update_broadcast",
-      "stop_broadcast",
       "delete_broadcast",
       "get_account",
     ],
@@ -141,7 +141,7 @@ test("every request carries the key, the user agent and asks for JSON", async ()
 });
 
 test("an unknown tool, or one the hosted refactor removed, is a protocol error", async () => {
-  for (const name of ["nope", "transcribe", "restore_transcription", "transcribe_url", "transcribe_file", "wait_for_transcription", "translate_transcription", "search_by_meaning", "get_broadcast", "list_voices"]) {
+  for (const name of ["nope", "transcribe", "restore_transcription", "transcribe_url", "transcribe_file", "wait_for_transcription", "translate_transcription", "search_by_meaning", "stop_broadcast", "list_voices"]) {
     await assert.rejects(call(client, name, {}), (e) => {
       assert.equal(e.code, -32602);
       assert.match(e.message, new RegExp(`unknown tool "${name}"`));
@@ -587,7 +587,7 @@ test("get_transcription with lang refuses an open live transcription and an unfi
   fake.on("GET", `/v1/transcriptions/${TID}`, { body: liveTx("live") });
   let r = await call(client, "get_transcription", { transcriptionId: TID, lang: "es" });
   assert.equal(r.structuredContent.error, "invalid_state");
-  assert.equal(r.content[0].text, "the live transcription is still running; read the text so far without lang, or stop it (stop_broadcast) and translate it then");
+  assert.equal(r.content[0].text, "the live transcription is still running; read the text so far without lang, or end it (update_broadcast with onAir false) and translate it then");
   r = await call(client, "get_transcription", { transcriptionId: TID, lang: "es", waitS: 5 });
   assert.equal(r.structuredContent.error, "invalid_state", "a live one never waits, so nothing ran out");
   fake.reset();
@@ -880,7 +880,7 @@ test("delete_transcription refuses a live recording and a locked one, maps an un
   let r = await call(client, "delete_transcription", { transcriptionId: TID });
   assert.equal(r.structuredContent.error, "invalid_state");
   assert.equal(r.structuredContent.status, 409);
-  assert.equal(r.content[0].text, "This transcription is still recording live; stop it first (stop_broadcast for a broadcast), then delete it.");
+  assert.equal(r.content[0].text, "This transcription is still recording live; end it first (update_broadcast with onAir false on its broadcast), then delete it.");
   fake.reset();
   fake.on("GET", `/v1/transcriptions/${TID}`, { body: tx() });
   fake.on("POST", `/v1/transcriptions/${TID}/archive`, apiError(409, "invalid_state", "this transcription is locked; unlock it before archiving it"));
@@ -1110,7 +1110,7 @@ test("delete_speaker: an unknown or someone else's id is not_found; a read-only 
   assert.equal(fake.requests.length, 0);
 });
 
-test("list_broadcasts lists them; with broadcastId it returns that one in detail as the only item", async () => {
+test("list_broadcasts lists them; get_broadcast returns one in detail", async () => {
   const live = bcast({
     currentTranscription: { transcriptionId: TID, state: "live", startedAt: T0 },
     lastRecordedAt: T0,
@@ -1127,11 +1127,9 @@ test("list_broadcasts lists them; with broadcastId it returns that one in detail
     { access: "public", archived: true, broadcastId: "b2", link: "https://vocalstack.com/sunday", listenersNow: 0, name: "Sunday service", onAir: false },
   ]);
   fake.requests = [];
-  const g = await call(client, "list_broadcasts", { broadcastId: BID.toUpperCase(), lifecycle: "archived" });
-  assert.deepEqual(seen(), [`GET /v1/broadcasts/${BID}`], "lifecycle is ignored with broadcastId");
-  assert.equal(g.structuredContent.broadcasts.length, 1);
-  const [one] = g.structuredContent.broadcasts;
-  const { transcriptions, streams, ...head } = one;
+  const g = await call(client, "get_broadcast", { broadcastId: BID.toUpperCase() });
+  assert.deepEqual(seen(), [`GET /v1/broadcasts/${BID}`]);
+  const { transcriptions, streams, ...head } = g.structuredContent;
   assert.deepEqual(head, first);
   assert.equal(transcriptions.length, 20);
   assert.deepEqual(transcriptions[0], { lastRecordedAt: T0, name: "Take 0", recording: true, transcriptionId: "t0" });
@@ -1139,26 +1137,24 @@ test("list_broadcasts lists them; with broadcastId it returns that one in detail
   assert.deepEqual(streams, [{ name: "Radio", url: "https://radio.example/live.m3u8" }]);
   fake.reset();
   fake.on("GET", `/v1/broadcasts/${BID}`, { body: bcast() });
-  const empty = await call(client, "list_broadcasts", { broadcastId: BID });
-  assert.deepEqual(empty.structuredContent.broadcasts[0].transcriptions, []);
-  assert.deepEqual(empty.structuredContent.broadcasts[0].streams, []);
+  const empty = await call(client, "get_broadcast", { broadcastId: BID });
+  assert.deepEqual(empty.structuredContent.transcriptions, []);
+  assert.deepEqual(empty.structuredContent.streams, []);
 });
 
-test("list_broadcasts: an unknown broadcastId, a bad one, a bad lifecycle", async () => {
+test("get_broadcast and list_broadcasts: an unknown broadcastId, a bad one, a bad lifecycle", async () => {
   fake.on("GET", `/v1/broadcasts/${BID}`, apiError(404, "not_found", "nope"));
-  let r = await call(client, "list_broadcasts", { broadcastId: BID });
+  let r = await call(client, "get_broadcast", { broadcastId: BID });
   assert.equal(r.structuredContent.error, "not_found");
   assert.equal(r.content[0].text, "No broadcast with that id for this account.");
   fake.reset();
-  r = await call(client, "list_broadcasts", { broadcastId: "b2" });
+  r = await call(client, "get_broadcast", { broadcastId: "b2" });
   assert.equal(r.content[0].text, "`broadcastId` must be a UUID");
   r = await call(client, "list_broadcasts", { lifecycle: "gone" });
   assert.equal(r.content[0].text, "`lifecycle` must be one of active, archived, all");
+  r = await call(client, "list_broadcasts", { broadcastId: BID });
+  assert.equal(r.structuredContent.error, "invalid_options", "one broadcast is get_broadcast");
   assert.equal(fake.requests.length, 0);
-  fake.on("GET", "/v1/broadcasts", { body: { broadcasts: [] } });
-  r = await call(client, "list_broadcasts", { broadcastId: "  " });
-  assert.deepEqual(r.structuredContent, { broadcasts: [] }, "a blank broadcastId lists them");
-  assert.deepEqual(only("GET", "/v1/broadcasts")[0].query, { lifecycle: "active" });
 });
 
 const STREAM = "https://www.radio.example/live.m3u8";
@@ -1182,7 +1178,7 @@ test("start_broadcast makes a broadcast named after the host, adds the stream an
     broadcastId: BID,
     link: "https://vocalstack.com/sunday",
     message:
-      "Share the link: anyone who opens it picks a language and reads (or hears) the stream in it as it plays. Read the transcript with get_transcription; stop it with stop_broadcast.",
+      "Share the link: anyone who opens it picks a language and reads (or hears) the stream in it as it plays. Read the transcript with get_transcription; end it with update_broadcast onAir false.",
     name: "Sunday service",
     state: "live",
     transcriptionId: TID,
@@ -1201,7 +1197,7 @@ test("start_broadcast on an existing broadcast reuses its stream; refuses one on
   fake.on("GET", `/v1/broadcasts/${BID}`, { body: bcast({ currentTranscription: { transcriptionId: TID, state: "live" } }) });
   r = await call(client, "start_broadcast", { streamUrl: STREAM, broadcastId: BID });
   assert.equal(r.isError, true);
-  assert.equal(r.content[0].text, "This broadcast is already on air; stop it first (stop_broadcast) or use another broadcast.");
+  assert.equal(r.content[0].text, "This broadcast is already on air; end its run first (update_broadcast with onAir false) or use another broadcast.");
   assert.deepEqual(r.structuredContent.details, { broadcastId: BID, link: "https://vocalstack.com/sunday" });
   assert.equal(r.structuredContent.error, "invalid_state");
   assert.deepEqual(seen(), [`GET /v1/broadcasts/${BID}`]);
@@ -1223,49 +1219,55 @@ test("start_broadcast retried with its key replays instead of starting twice", a
   assert.equal(r.structuredContent.transcriptionId, TID);
 });
 
-test("stop_broadcast pauses a live transcription, then stops it", async () => {
+test("update_broadcast onAir false pauses a live transcription, then stops it, and reports the ended run", async () => {
   fake.on("GET", `/v1/broadcasts/${BID}`, { body: bcast({ currentTranscription: { transcriptionId: TID, state: "live" } }) });
+  fake.on("GET", `/v1/broadcasts/${BID}`, { body: bcast() });
   fake.on("GET", `/v1/transcriptions/${TID}`, { body: liveTx("live") });
   fake.on("GET", `/v1/transcriptions/${TID}`, { body: liveTx("processing", { endedAt: "2026-11-19T11:00:00Z" }) });
   fake.on("POST", `/v1/transcriptions/${TID}/pause`, { body: liveTx("paused") });
   fake.on("POST", `/v1/transcriptions/${TID}/stop`, { body: liveTx("processing") });
-  const r = await call(client, "stop_broadcast", { broadcastId: BID });
+  const r = await call(client, "update_broadcast", { broadcastId: BID, onAir: false });
+  assert.equal(r.isError, undefined, r.content[0].text);
   assert.deepEqual(seen(), [
     `GET /v1/broadcasts/${BID}`,
     `GET /v1/transcriptions/${TID}`,
     `POST /v1/transcriptions/${TID}/pause`,
     `POST /v1/transcriptions/${TID}/stop`,
     `GET /v1/transcriptions/${TID}`,
+    `GET /v1/broadcasts/${BID}`,
   ]);
   assert.deepEqual(only("POST", `/v1/transcriptions/${TID}/stop`)[0].body, {});
-  assert.deepEqual(r.structuredContent, {
-    broadcastId: BID,
+  assert.deepEqual(r.structuredContent.stopped, {
     createdAt: T0,
     durationS: 30,
     endedAt: "2026-11-19T11:00:00Z",
     kind: "live",
-    link: "https://vocalstack.com/sunday",
     name: "Episode 12",
     spokenLanguage: "en",
     startedAt: "2026-11-19T10:01:00Z",
     state: "finishing",
     transcriptionId: TID,
   });
+  assert.equal(r.structuredContent.onAir, false);
 });
 
-test("stop_broadcast: paused skips the pause; not on air is invalid_state", async () => {
+test("update_broadcast onAir: paused skips the pause; not on air changes nothing; true is refused", async () => {
   fake.on("GET", `/v1/broadcasts/${BID}`, { body: bcast({ currentTranscription: { transcriptionId: TID, state: "paused" } }) });
   fake.on("GET", `/v1/transcriptions/${TID}`, { body: liveTx("paused") });
   fake.on("POST", `/v1/transcriptions/${TID}/stop`, { body: liveTx("processing") });
-  await call(client, "stop_broadcast", { broadcastId: BID });
+  await call(client, "update_broadcast", { broadcastId: BID, onAir: false });
   assert.equal(only("POST", `/v1/transcriptions/${TID}/pause`).length, 0);
   assert.equal(only("POST", `/v1/transcriptions/${TID}/stop`).length, 1);
   fake.reset();
   fake.on("GET", `/v1/broadcasts/${BID}`, { body: bcast({ currentTranscription: { transcriptionId: TID, state: "finalized" } }) });
-  const r = await call(client, "stop_broadcast", { broadcastId: BID });
-  assert.equal(r.content[0].text, "This broadcast is not on air.");
-  assert.deepEqual(r.structuredContent.details, { broadcastId: BID });
-  assert.equal(r.structuredContent.status, 409);
+  let r = await call(client, "update_broadcast", { broadcastId: BID, onAir: false });
+  assert.equal(r.isError, undefined, r.content[0].text);
+  assert.equal(r.structuredContent.stopped, null);
+  assert.equal(only("POST", `/v1/transcriptions/${TID}/stop`).length, 0);
+  fake.reset();
+  r = await call(client, "update_broadcast", { broadcastId: BID, onAir: true });
+  assert.equal(r.structuredContent.error, "invalid_options");
+  assert.equal(fake.requests.length, 0);
 });
 
 test("get_transcription: the status carries shareUrl when the transcription has a share link, and nothing when the lookup fails", async () => {
@@ -1505,7 +1507,7 @@ test("delete_broadcast: on air is refused with the hosted wording; unknown, read
   let r = await call(client, "delete_broadcast", { broadcastId: BID });
   assert.equal(r.structuredContent.error, "invalid_state");
   assert.equal(r.structuredContent.status, 409);
-  assert.equal(r.content[0].text, "This broadcast is on air; stop it first (stop_broadcast), then delete it.");
+  assert.equal(r.content[0].text, "This broadcast is on air; end its run first (update_broadcast with onAir false), then delete it.");
   assert.deepEqual(r.structuredContent.details, { broadcastId: BID });
   fake.reset();
   fake.on("GET", `/v1/broadcasts/${BID}`, apiError(404, "not_found", "broadcast not found"));

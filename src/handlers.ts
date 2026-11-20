@@ -522,7 +522,7 @@ async function getTranscription(a: Args, ctx: Context): Promise<Json> {
     let notYet: string | undefined;
     if (t.job && t.job.state !== "done") notYet = `the transcription is ${t.job.state}; wait until it is done (get_transcription with waitS)`;
     else if (!t.job && OPEN.has(t.state)) {
-      notYet = "the live transcription is still running; read the text so far without lang, or stop it (stop_broadcast) and translate it then";
+      notYet = "the live transcription is still running; read the text so far without lang, or end it (update_broadcast with onAir false) and translate it then";
     }
     if (notYet !== undefined) {
       if (timedOut === true) return out;
@@ -823,11 +823,10 @@ async function oneBroadcast(a: Args, ctx: Context): Promise<Json> {
     return o;
   });
   v.streams = (b.audioSources ?? []).map((s: Json) => ({ name: s.name, url: s.url }));
-  return { broadcasts: [v] };
+  return v;
 }
 
 async function listBroadcasts(a: Args, ctx: Context): Promise<Json> {
-  if (a.str("broadcastId") !== undefined) return oneBroadcast(a, ctx);
   const lifecycle = a.oneOf("lifecycle", ["active", "archived", "all"], "active");
   const list = await all(ctx, "/v1/broadcasts", "broadcasts", { lifecycle });
   return { broadcasts: list.map(brief) };
@@ -855,7 +854,7 @@ async function deleteTranscription(a: Args, ctx: Context): Promise<Json> {
     if (e instanceof ToolError && e.code === "invalid_state" && e.message.includes("stop the recording first")) {
       throw new ToolError(
         "invalid_state",
-        "This transcription is still recording live; stop it first (stop_broadcast for a broadcast), then delete it.",
+        "This transcription is still recording live; end it first (update_broadcast with onAir false on its broadcast), then delete it.",
       );
     }
     throw e;
@@ -1075,11 +1074,14 @@ async function updateBroadcast(a: Args, ctx: Context): Promise<Json> {
   const consent = a.bool("consent");
   const restore = optBool(a, "restore");
   if (restore === false) throw bad("`restore` takes only true (bring it back from the trash); delete_broadcast moves it there");
+  const onAirArg = optBool(a, "onAir");
+  if (onAirArg === true) throw bad("`onAir` takes only false (end the live run); start_broadcast puts a broadcast on air");
   const changes = [name, access, newCode, spokenRaw, speak, cloned].some((v) => v !== undefined);
-  if (!changes && restore === undefined) {
-    throw bad("give at least one of `name`, `access`, `newListenerCode`, `spokenLanguage`, `spokenTranslations`, `clonedVoices` or `restore` to change");
+  if (!changes && restore === undefined && onAirArg === undefined) {
+    throw bad("give at least one of `onAir`, `name`, `access`, `newListenerCode`, `spokenLanguage`, `spokenTranslations`, `clonedVoices` or `restore` to change");
   }
   if (cloned === true && !consent) throw bad(NEEDS_CONSENT);
+  const stopped = onAirArg === false ? await endRun(ctx, id) : undefined;
   let b: Json = await broadcast(ctx, id);
   const restored = restore === true && b.lifecycle === "archived";
   if (restored) b = (await ctx.api.request("POST", path("/v1/broadcasts/", id, "/restore"), { signal: ctx.signal })).data;
@@ -1127,10 +1129,11 @@ async function updateBroadcast(a: Args, ctx: Context): Promise<Json> {
     spokenTranslations: b.settings?.translationTts === true,
     clonedVoices: b.settings?.voiceCloning === true,
     ...(restore !== undefined ? { restored } : {}),
+    ...(stopped !== undefined ? { stopped } : {}),
   };
 }
 
-const ON_AIR = "This broadcast is already on air; stop it first (stop_broadcast) or use another broadcast.";
+const ON_AIR = "This broadcast is already on air; end its run first (update_broadcast with onAir false) or use another broadcast.";
 
 async function startBroadcast(a: Args, ctx: Context): Promise<Json> {
   const key = idempotencyKey(a);
@@ -1211,22 +1214,21 @@ async function startBroadcast(a: Args, ctx: Context): Promise<Json> {
     transcriptionId: grant.data.transcription?.id,
     state: liveState(grant.data.transcription?.state),
     message:
-      "Share the link: anyone who opens it picks a language and reads (or hears) the stream in it as it plays. Read the transcript with get_transcription; stop it with stop_broadcast.",
+      "Share the link: anyone who opens it picks a language and reads (or hears) the stream in it as it plays. Read the transcript with get_transcription; end it with update_broadcast onAir false.",
   };
   if (grant.headers.get("idempotent-replayed") === "true") v.replayed = true;
   return v;
 }
 
-async function stopBroadcast(a: Args, ctx: Context): Promise<Json> {
-  const b = await broadcast(ctx, a.id("broadcastId"));
+async function endRun(ctx: Context, id: string): Promise<Json | null> {
+  const b = await broadcast(ctx, id);
   const c = onAir(b);
-  if (!c) throw new ToolError("invalid_state", "This broadcast is not on air.", { broadcastId: b.id });
+  if (!c) return null;
   const tid: string = c.transcriptionId;
   const t = await transcription(ctx, tid);
   if (t.state === "live") await ctx.api.request("POST", path("/v1/transcriptions/", tid, "/pause"), { signal: ctx.signal });
   if (OPEN.has(t.state)) await ctx.api.request("POST", path("/v1/transcriptions/", tid, "/stop"), { json: {}, signal: ctx.signal });
-  const after = await transcription(ctx, tid);
-  return { ...liveStatus(after), broadcastId: b.id, link: b.shareUrl };
+  return liveStatus(await transcription(ctx, tid));
 }
 
 async function deleteBroadcast(a: Args, ctx: Context): Promise<Json> {
@@ -1237,7 +1239,7 @@ async function deleteBroadcast(a: Args, ctx: Context): Promise<Json> {
     b = (await ctx.api.request("POST", path("/v1/broadcasts/", id, "/archive"), { signal: ctx.signal })).data;
   } catch (e) {
     if (e instanceof ToolError && e.code === "invalid_state" && e.message.includes("stop the recording first")) {
-      throw new ToolError("invalid_state", "This broadcast is on air; stop it first (stop_broadcast), then delete it.", { broadcastId: id });
+      throw new ToolError("invalid_state", "This broadcast is on air; end its run first (update_broadcast with onAir false), then delete it.", { broadcastId: id });
     }
     throw e;
   }
@@ -1258,9 +1260,9 @@ export const handlers: Record<string, Handler> = {
   update_speaker: updateSpeaker,
   delete_speaker: deleteSpeaker,
   list_broadcasts: listBroadcasts,
+  get_broadcast: oneBroadcast,
   start_broadcast: startBroadcast,
   update_broadcast: updateBroadcast,
-  stop_broadcast: stopBroadcast,
   delete_broadcast: deleteBroadcast,
   get_account: getAccount,
 };
